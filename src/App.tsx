@@ -34,26 +34,7 @@ export default function App() {
         // ignore
       }
     }
-    return [
-      {
-        id: 'default-entry',
-        asset: 'XAU_USD',
-        targetType: 'BELOW',
-        targetPrice: 3965.0,
-        label: 'จุดเข้าช้อนซื้อไม้ 1 (Entry)',
-        active: true,
-        createdTime: new Date().toISOString(),
-      },
-      {
-        id: 'default-tp1',
-        asset: 'XAU_USD',
-        targetType: 'ABOVE',
-        targetPrice: 4013.93,
-        label: 'เป้าทำกำไรระยะสั้น 1-2 วัน (+1.00% บนเป๋าตัง)',
-        active: true,
-        createdTime: new Date().toISOString(),
-      },
-    ];
+    return [];
   });
 
   // Auto-Pilot Trade Alerts Settings

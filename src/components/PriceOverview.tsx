@@ -103,8 +103,8 @@ export const PriceOverview: React.FC<Props> = ({
           <span className="text-slate-500">|</span>
           <span className="text-emerald-400 font-mono-numbers text-[11px] bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
             {dataSource === 'LIVE_MARKET'
-              ? 'ดึงราคาตลาดโลกสด (Live Financial API)'
-              : 'อ้างอิงกระดาน MTS เป๋าตัง ($3,974.19)'}
+              ? 'ดึงราคาตลาดโลกสด (Live Gold-API XAU/USD)'
+              : `ปรับเทียบราคาเป๋าตัง ($${xauUsd.toFixed(2)})`}
           </span>
         </div>
 
@@ -311,7 +311,7 @@ export const PriceOverview: React.FC<Props> = ({
                     Auto Live Sync
                   </span>
                   <span className="text-[10px] text-slate-400">
-                    Financial APIs (CoinGecko/ER-API)
+                    Live Spot XAU/USD & ER-API
                   </span>
                 </button>
               </div>

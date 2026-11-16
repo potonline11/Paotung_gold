@@ -20,50 +20,81 @@ function getGenAI() {
   });
 }
 
-// Real-time market state calibrated with Paotang Gold Wallet (MTS 99.99%: $3,974.19/oz)
-let baseSpotGold = 3974.19;
-let baseUsdThb = 33.72;
+// Real-time market state (auto-synced with live world XAU/USD & USD/THB)
+let baseSpotGold = 3872.77;
+let baseUsdThb = 33.9;
 let lastUpdate = new Date().toISOString();
-let priceDataSource = 'PAOTANG_CALIBRATED';
+let lastLiveFetchAt = 0;
+let priceDataSource = 'LIVE_MARKET';
+const LIVE_CACHE_TTL_MS = 15000;
 
-// Background fetch from live financial market APIs
-async function fetchLiveMarketData() {
+// Fetch live XAU/USD spot and USD/THB FX rate
+async function fetchLiveMarketData(force = false) {
+  const now = Date.now();
+  if (!force && lastLiveFetchAt > 0 && now - lastLiveFetchAt < LIVE_CACHE_TTL_MS) {
+    return false;
+  }
+
   try {
-    const [goldRes, fxRes] = await Promise.allSettled([
-      fetch('https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd,thb', {
+    const [xauRes, fxRes] = await Promise.allSettled([
+      fetch('https://api.gold-api.com/price/XAU', {
         headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(4500),
       }),
-      fetch('https://open.er-api.com/v6/latest/USD'),
+      fetch('https://open.er-api.com/v6/latest/USD', {
+        signal: AbortSignal.timeout(4500),
+      }),
     ]);
 
-    if (goldRes.status === 'fulfilled' && goldRes.value.ok) {
-      const goldData = await goldRes.value.json();
-      if (goldData['pax-gold']?.usd) {
-        baseSpotGold = Number(goldData['pax-gold'].usd.toFixed(2));
+    let updatedSpot = false;
+    if (xauRes.status === 'fulfilled' && xauRes.value.ok) {
+      const xauJson = await xauRes.value.json();
+      if (xauJson?.price && Number(xauJson.price) > 1000) {
+        baseSpotGold = Number(Number(xauJson.price).toFixed(2));
+        updatedSpot = true;
+      }
+    }
+
+    if (!updatedSpot) {
+      try {
+        const cgRes = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd',
+          { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4000) }
+        );
+        if (cgRes.ok) {
+          const cgData = await cgRes.json();
+          if (cgData['pax-gold']?.usd) {
+            baseSpotGold = Number(cgData['pax-gold'].usd.toFixed(2));
+            updatedSpot = true;
+          }
+        }
+      } catch {
+        // Ignore fallback failure
       }
     }
 
     if (fxRes.status === 'fulfilled' && fxRes.value.ok) {
       const fxData = await fxRes.value.json();
-      if (fxData.rates?.THB) {
-        baseUsdThb = Number(fxData.rates.THB.toFixed(2));
+      if (fxData?.rates?.THB && Number(fxData.rates.THB) > 20) {
+        baseUsdThb = Number(Number(fxData.rates.THB).toFixed(2));
       }
     }
+
+    if (updatedSpot) {
+      lastLiveFetchAt = now;
+      lastUpdate = new Date().toISOString();
+      priceDataSource = 'LIVE_MARKET';
+    }
+    return updatedSpot;
   } catch (e) {
-    console.error('Live market fetch notice (using calibrated baseline):', e?.message || e);
+    console.error('Live market fetch notice (using last known spot):', e?.message || e);
+    return false;
   }
 }
 
-// Fetch FX on cold start without blocking serverless init
+// Fetch live gold + FX on local cold start without blocking serverless init
 if (typeof process !== 'undefined' && process.env.VERCEL !== '1') {
-  fetch('https://open.er-api.com/v6/latest/USD')
-    .then((r) => r.json())
-    .then((fxData) => {
-      if (fxData?.rates?.THB) {
-        baseUsdThb = Number(fxData.rates.THB.toFixed(2));
-      }
-    })
-    .catch(() => {});
+  fetchLiveMarketData(true).catch(() => {});
 }
 
 // Helper to calculate Thai gold 96.5% price per baht
@@ -481,10 +512,11 @@ function formulateSpeculationPlan(spot, usdThb, indicators) {
 }
 
 // API: Get complete market data & signals
-app.get('/api/market/overview', (req, res) => {
+app.get('/api/market/overview', async (req, res) => {
   try {
-    const randomShift = (Math.random() - 0.49) * 0.35;
-    baseSpotGold = Number((baseSpotGold + randomShift).toFixed(2));
+    if (priceDataSource !== 'CUSTOM') {
+      await fetchLiveMarketData(false);
+    }
     lastUpdate = new Date().toISOString();
 
     const candles = generateHistoricalCandles(60, baseSpotGold);
@@ -520,7 +552,7 @@ app.post('/api/market/sync-price', async (req, res) => {
     const { spot, usdThb, mode } = req.body || {};
 
     if (mode === 'LIVE_API') {
-      await fetchLiveMarketData();
+      await fetchLiveMarketData(true);
       priceDataSource = 'LIVE_MARKET';
       return res.json({
         success: true,
@@ -562,29 +594,35 @@ app.post('/api/market/simulate-tick', (req, res) => {
 // API: AI Market Strategist via Gemini
 app.post('/api/gemini/analyze', async (req, res) => {
   try {
+    const { spot, usdThb, rsi, macdHist, signal } = req.body || {};
+    const currentSpotVal = Number(spot || baseSpotGold);
+    const currentThbVal = Number(usdThb || baseUsdThb);
+
     if (!process.env.GEMINI_API_KEY) {
+      const tp5Val = (currentSpotVal * 1.05).toFixed(2);
+      const supportVal = (currentSpotVal * 0.995).toFixed(2);
+      const slVal = (currentSpotVal * 0.991).toFixed(2);
+      const thaiSupport = calculateThaiGoldPrice(Number(supportVal), currentThbVal).associationSell;
+      const thaiTp5 = calculateThaiGoldPrice(Number(tp5Val), currentThbVal).associationSell;
+
       return res.status(200).json({
         success: true,
         aiAnalysis: {
           sentiment: 'BULLISH',
-          macroSummary:
-            'ราคาทองคำมีแนวโน้มปรับตัวขึ้นจากแรงหนุนความไม่แน่นอนทางภูมิรัฐศาสตร์และแนวโน้มการลดดอกเบี้ยของธนาคารกลางสหรัฐ (Fed) ส่งผลให้เงินดอลลาร์อ่อนค่าและดันราคาทองคำสปอตโลก',
-          weeklyOutlook:
-            'ในกรอบ 1 สัปดาห์ คาดว่าทองคำมีโอกาสดีดขึ้นทดสอบแนวต้าน $4,015 - $4,172 หากสามารถยืนเหนือระดับ $3,960 ได้อย่างมั่นคง',
+          macroSummary: `ราคาทองคำสปอต ($${currentSpotVal.toFixed(2)}) กำลังแกว่งตัวในกรอบเก็งกำไร โดยมีแรงหนุนจากความต้องการสินทรัพย์ปลอดภัยและค่าเงินบาท (฿${currentThbVal.toFixed(2)}/USD)`,
+          weeklyOutlook: `ในกรอบ 1 สัปดาห์ คาดว่าทองคำมีโอกาสดีดขึ้นทดสอบแนวต้าน $${(currentSpotVal * 1.025).toFixed(2)} - $${tp5Val} หากสามารถยืนเหนือแนวรับ $${supportVal} ได้อย่างมั่นคง`,
           paotangStrategy:
             'สำหรับการเทรดผ่านเป๋าตัง Gold Wallet: แนะนำเข้าซื้อวันจันทร์เมื่อคะแนนปัจจัย ≥ 98% แล้วตั้งราคาขายล่วงหน้า 7 วันบนแอปเป๋าตังที่เป้าหมาย TP +5.00% ปิดขายทำกำไรก่อนตลาดปิดวันศุกร์',
           keyLevels: {
-            support: 'แนวรับสำคัญ: $3,955 / บาทละ 63,100 บาท',
-            resistance: 'แนวต้านเป้าหมาย +5%: $4,172 / บาทละ 66,550 บาท',
-            stopLoss: 'จุดตัดขาดทุน (SL): หลุด $3,938',
+            support: `แนวรับสำคัญ: $${supportVal} / บาทละ ฿${thaiSupport.toLocaleString()}`,
+            resistance: `แนวต้านเป้าหมาย +5%: $${tp5Val} / บาทละ ฿${thaiTp5.toLocaleString()}`,
+            stopLoss: `จุดตัดขาดทุน (SL): หลุด $${slVal}`,
           },
           riskWarnings:
             'ระวังความผันผวนของค่าเงินบาท (USD/THB) ในช่วงกลางสัปดาห์ และการเปิดเผยตัวเลขเศรษฐกิจสหรัฐฯ',
         },
       });
     }
-
-    const { spot, usdThb, rsi, macdHist, signal } = req.body || {};
 
     const prompt = `
 คุณเป็นผู้เชี่ยวชาญด้านการลงทุนทองคำและการเทรดทองคำออนไลน์ผ่านแอป "เป๋าตัง" (Paotang Gold Wallet - พันธมิตร MTS Gold, YLG, Aurora)
@@ -740,6 +778,26 @@ app.post('/api/notify/telegram/detect-chat', async (req, res) => {
   }
 });
 
+async function sendTelegramDirect(botToken, chatId, message, parseMode) {
+  const payload = {
+    chat_id: chatId,
+    text: message,
+    disable_web_page_preview: true,
+  };
+  if (parseMode) {
+    payload.parse_mode = parseMode;
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const tgData = await response.json().catch(() => ({}));
+  return { response, tgData };
+}
+
 // API: Send Telegram Bot Notification to Group / Channel / Chat
 app.post('/api/notify/telegram', async (req, res) => {
   try {
@@ -780,24 +838,12 @@ app.post('/api/notify/telegram', async (req, res) => {
       });
     }
 
-    const payload = {
-      chat_id: activeChatId,
-      text: message,
-      disable_web_page_preview: true,
-    };
-    if (parseMode) {
-      payload.parse_mode = parseMode;
-    }
-
-    const response = await fetch(`https://api.telegram.org/bot${activeBotToken}/sendMessage`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const tgData = await response.json().catch(() => ({}));
+    const { response, tgData } = await sendTelegramDirect(
+      activeBotToken,
+      activeChatId,
+      message,
+      parseMode
+    );
 
     if (response.ok && tgData.ok) {
       return res.json({
@@ -827,6 +873,167 @@ app.post('/api/notify/telegram', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error?.message || 'Telegram error' });
+  }
+});
+
+let lastCronNotifyAt = 0;
+
+// API: Cron-Job.org Webhook Endpoint (GET or POST) for 24/7 automated scanning & Telegram alerts
+app.all('/api/cron/check-signal', async (req, res) => {
+  try {
+    // Optional CRON_SECRET guard if user configures CRON_SECRET in Vercel Env
+    const cronSecret = process.env.CRON_SECRET?.trim();
+    if (cronSecret) {
+      const providedKey =
+        req.query?.key ||
+        req.headers['x-cron-secret'] ||
+        (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      if (providedKey !== cronSecret) {
+        return res.status(401).json({ success: false, error: 'Invalid CRON_SECRET key' });
+      }
+    }
+
+    const forceSend = req.query?.force === 'true' || req.body?.force === true;
+    const minScore = Number(req.query?.minScore || 98);
+    const cooldownMinutes = Number(req.query?.cooldown || 360);
+    const useCalibrated = req.query?.source === 'calibrated';
+
+    let spot = baseSpotGold;
+    let usdThb = baseUsdThb;
+    let resolvedSource = priceDataSource;
+
+    if (req.query?.spot && !Number.isNaN(Number(req.query.spot))) {
+      spot = Number(Number(req.query.spot).toFixed(2));
+      resolvedSource = 'QUERY_OVERRIDE';
+    } else if (!useCalibrated) {
+      // Fetch fresh global spot gold & USD/THB on cron invocation
+      try {
+        const [xauRes, fxRes] = await Promise.allSettled([
+          fetch('https://api.gold-api.com/price/XAU', {
+            signal: AbortSignal.timeout(4500),
+          }),
+          fetch('https://open.er-api.com/v6/latest/USD', {
+            signal: AbortSignal.timeout(4500),
+          }),
+        ]);
+
+        if (xauRes.status === 'fulfilled' && xauRes.value.ok) {
+          const xauJson = await xauRes.value.json();
+          if (xauJson?.price && Number(xauJson.price) > 1000) {
+            spot = Number(Number(xauJson.price).toFixed(2));
+            baseSpotGold = spot;
+            resolvedSource = 'LIVE_XAU_API';
+          }
+        }
+
+        if (fxRes.status === 'fulfilled' && fxRes.value.ok) {
+          const fxJson = await fxRes.value.json();
+          if (fxJson?.rates?.THB && Number(fxJson.rates.THB) > 20) {
+            usdThb = Number(Number(fxJson.rates.THB).toFixed(2));
+            baseUsdThb = usdThb;
+          }
+        }
+      } catch {
+        // Fallback smoothly to baseline
+      }
+    }
+
+    const candles = generateHistoricalCandles(60, spot);
+    const indicators = calculateIndicators(candles);
+    const thaiGold = calculateThaiGoldPrice(spot, usdThb);
+    const plan = formulateSpeculationPlan(spot, usdThb, indicators);
+    const score = plan.confidenceScore || 0;
+    const qualified = score >= minScore || plan.factorBreakdown?.isConfluence98Reached;
+
+    const envBotToken =
+      process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'MY_TELEGRAM_BOT_TOKEN'
+        ? process.env.TELEGRAM_BOT_TOKEN.trim()
+        : '';
+    const envChatId =
+      process.env.TELEGRAM_CHAT_ID && process.env.TELEGRAM_CHAT_ID !== 'MY_TELEGRAM_CHAT_ID'
+        ? process.env.TELEGRAM_CHAT_ID.trim()
+        : '';
+
+    const activeBotToken = (req.body?.botToken || req.query?.botToken || envBotToken || '').trim();
+    const activeChatId = (req.body?.chatId || req.query?.chatId || envChatId || '').trim();
+
+    const nowMs = Date.now();
+    const cooldownMs = Math.max(1, cooldownMinutes) * 60 * 1000;
+    const withinCooldown = !forceSend && lastCronNotifyAt > 0 && nowMs - lastCronNotifyAt < cooldownMs;
+
+    let notificationSent = false;
+    let chatTitle = null;
+    let reason = '';
+
+    if (!activeBotToken || !activeChatId) {
+      reason =
+        'ตรวจสอบราคาสำเร็จ แต่ยังไม่ได้ตั้งค่า TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID ใน Environment Variables บน Vercel';
+    } else if (!qualified && !forceSend) {
+      reason = `คะแนนปัจจัยรวมปัจจุบัน ${score}% (ยังไม่ถึงเกณฑ์ ${minScore}% จึงยังไม่ส่งแจ้งเตือนเพื่อลดสแปม)`;
+    } else if (withinCooldown) {
+      reason = `ผ่านเกณฑ์ ${score}% แต่อยู่ในช่วงพัก Cooldown (${cooldownMinutes} นาที) เพื่อป้องกันการส่งซ้ำ`;
+    } else {
+      const weekly = plan.weeklyStrategy;
+      const headerTag = forceSend
+        ? `🤖 [Cron-Job รายงานสัญญาณทองคำเป๋าตัง - มั่นใจ ${score}%]`
+        : `🚨 [Cron-Job ตรวจพบจังหวะเข้าซื้อ! - คะแนนปัจจัย ${score}%]`;
+
+      const message = `
+${headerTag}
+------------------------------------
+🎯 สัญญาณระบบ: ${plan.signal} (Confluence ${score}%)
+🗓️ กลยุทธ์สัปดาห์: ${weekly.entryDay} ➔ ${weekly.exitDay}
+💰 ราคาทองสปอตโลก: $${spot.toFixed(2)} USD/oz
+🪙 ราคาทอง 96.5% (สมาคม): ฿${thaiGold.associationSell.toLocaleString()} บาท
+💱 ค่าเงินบาท: ฿${usdThb.toFixed(2)} / USD
+
+🎯 จุดยุทธศาสตร์รอบสัปดาห์นี้:
+• ช่วงเข้าซื้อ (Entry): $${plan.spotLevels.entryRange}
+• เป้าหมาย TP +5.00%: $${weekly.targetSpotPrice} USD (฿${weekly.targetThaiPrice.toLocaleString()} บาท)
+• จุดตัดขาดทุน (SL): $${plan.spotLevels.stopLoss}
+
+💡 แอ็กชันบนเป๋าตัง:
+• พอร์ต USD (MTS / YLG) สเปรดแคบ 0.40$
+• เมื่อซื้อแล้ว กด "ขายทอง" > "ตั้งราคา" +5.00% ($${weekly.targetSpotPrice} USD) อายุ 7 วัน ปิดทำกำไรก่อนวันศุกร์
+      `.trim();
+
+      const { response, tgData } = await sendTelegramDirect(activeBotToken, activeChatId, message);
+      if (response.ok && tgData.ok) {
+        notificationSent = true;
+        lastCronNotifyAt = nowMs;
+        chatTitle = tgData.result?.chat?.title || tgData.result?.chat?.username || activeChatId;
+        reason = forceSend
+          ? `ทดสอบส่งรายงานเข้ากลุ่ม Telegram "${chatTitle}" สำเร็จ`
+          : `คะแนนปัจจัยถึง ${score}% (≥ ${minScore}%) ส่งแจ้งเตือนเข้ากลุ่ม Telegram "${chatTitle}" แล้ว`;
+      } else {
+        return res.status(response.status || 502).json({
+          success: false,
+          checkedAt: new Date().toISOString(),
+          spot,
+          usdThb,
+          confidenceScore: score,
+          notificationSent: false,
+          error: tgData?.description || 'ส่งข้อความเข้า Telegram ไม่สำเร็จ',
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      checkedAt: new Date().toISOString(),
+      priceSource: resolvedSource,
+      spot,
+      usdThb,
+      thaiGold965: thaiGold.associationSell,
+      signal: plan.signal,
+      confidenceScore: score,
+      isConfluence98Reached: qualified,
+      notificationSent,
+      chatTitle,
+      reason,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Cron check error' });
   }
 });
 
