@@ -20,6 +20,7 @@ import { Bell, ShieldCheck, Zap, BookOpen, AlertCircle } from 'lucide-react';
 export default function App() {
   const [marketData, setMarketData] = useState<MarketOverviewData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [selectedPartner, setSelectedPartner] = useState<'mts' | 'ylg' | 'aurora'>('mts');
 
@@ -310,14 +311,21 @@ export default function App() {
   const fetchMarketData = useCallback(async () => {
     try {
       const res = await fetch('/api/market/overview');
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data: MarketOverviewData = await res.json();
       if (data.success) {
         setMarketData(data);
+        setLoadError(null);
         checkAlertTriggers(data.rates.xauUsd, data.thaiGold.associationSell);
         checkAutoTradeTriggers(data);
+      } else {
+        throw new Error('ไม่สามารถโหลดข้อมูลตลาดได้');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to fetch market data:', err);
+      setLoadError(err?.message || 'เชื่อมต่อ API ตลาดทองคำไม่สำเร็จ');
     } finally {
       setIsLoading(false);
     }
@@ -492,14 +500,37 @@ export default function App() {
 
   if (isLoading || !marketData) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-300 space-y-4">
-        <div className="w-12 h-12 border-3 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
-        <div className="text-center">
-          <p className="font-bold text-lg text-white">กำลังเชื่อมต่อข้อมูลตลาดทองคำเป๋าตัง...</p>
-          <p className="text-xs text-slate-500 mt-1">
-            ดึงราคา XAU/USD, USD/THB, สมาคมค้าทองคำ และคำนวณสเปรด MTS, YLG, Aurora
-          </p>
-        </div>
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-300 space-y-4 px-4">
+        {loadError ? (
+          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl p-6 max-w-md w-full text-center space-y-3 shadow-2xl">
+            <AlertCircle className="w-10 h-10 text-rose-400 mx-auto" />
+            <p className="font-bold text-base text-white">เชื่อมต่อข้อมูลตลาดทองคำไม่สำเร็จ</p>
+            <p className="text-xs text-rose-300 font-mono bg-slate-950 px-3 py-2 rounded-lg border border-slate-800">
+              {loadError}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setIsLoading(true);
+                setLoadError(null);
+                fetchMarketData();
+              }}
+              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl transition-colors"
+            >
+              ลองเชื่อมต่อใหม่อีกครั้ง
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="w-12 h-12 border-3 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="text-center">
+              <p className="font-bold text-lg text-white">กำลังเชื่อมต่อข้อมูลตลาดทองคำเป๋าตัง...</p>
+              <p className="text-xs text-slate-500 mt-1">
+                ดึงราคา XAU/USD, USD/THB, สมาคมค้าทองคำ และคำนวณสเปรด MTS, YLG, Aurora
+              </p>
+            </div>
+          </>
+        )}
       </div>
     );
   }

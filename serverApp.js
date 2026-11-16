@@ -2,52 +2,55 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 
-dotenv.config();
+if (typeof process !== 'undefined' && process.env.VERCEL !== '1') {
+  dotenv.config();
+}
 
 export const app = express();
 app.use(express.json());
 
-// Initialize Google GenAI
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || '',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+function getGenAI() {
+  return new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY || '',
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
     },
-  },
-});
+  });
+}
 
 // Real-time market state calibrated with Paotang Gold Wallet (MTS 99.99%: $3,974.19/oz)
 let baseSpotGold = 3974.19;
 let baseUsdThb = 33.72;
 let lastUpdate = new Date().toISOString();
-let priceDataSource: 'PAOTANG_CALIBRATED' | 'LIVE_MARKET' | 'CUSTOM' = 'PAOTANG_CALIBRATED';
+let priceDataSource = 'PAOTANG_CALIBRATED';
 
 // Background fetch from live financial market APIs
 async function fetchLiveMarketData() {
   try {
     const [goldRes, fxRes] = await Promise.allSettled([
       fetch('https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd,thb', {
-        headers: { 'Accept': 'application/json' },
+        headers: { Accept: 'application/json' },
       }),
       fetch('https://open.er-api.com/v6/latest/USD'),
     ]);
 
     if (goldRes.status === 'fulfilled' && goldRes.value.ok) {
-      const goldData: any = await goldRes.value.json();
+      const goldData = await goldRes.value.json();
       if (goldData['pax-gold']?.usd) {
         baseSpotGold = Number(goldData['pax-gold'].usd.toFixed(2));
       }
     }
 
     if (fxRes.status === 'fulfilled' && fxRes.value.ok) {
-      const fxData: any = await fxRes.value.json();
+      const fxData = await fxRes.value.json();
       if (fxData.rates?.THB) {
         baseUsdThb = Number(fxData.rates.THB.toFixed(2));
       }
     }
-  } catch (e: any) {
-    console.error('Live market fetch notice (using calibrated baseline):', e.message);
+  } catch (e) {
+    console.error('Live market fetch notice (using calibrated baseline):', e?.message || e);
   }
 }
 
@@ -55,7 +58,7 @@ async function fetchLiveMarketData() {
 if (typeof process !== 'undefined' && process.env.VERCEL !== '1') {
   fetch('https://open.er-api.com/v6/latest/USD')
     .then((r) => r.json())
-    .then((fxData: any) => {
+    .then((fxData) => {
       if (fxData?.rates?.THB) {
         baseUsdThb = Number(fxData.rates.THB.toFixed(2));
       }
@@ -64,7 +67,7 @@ if (typeof process !== 'undefined' && process.env.VERCEL !== '1') {
 }
 
 // Helper to calculate Thai gold 96.5% price per baht
-export function calculateThaiGoldPrice(spot: number, usdThb: number, premium: number = 2.0) {
+export function calculateThaiGoldPrice(spot, usdThb, premium = 2.0) {
   const purityFactor = 0.965;
   const ozToGram = 31.1035;
   const bahtToGram = 15.244;
@@ -81,7 +84,7 @@ export function calculateThaiGoldPrice(spot: number, usdThb: number, premium: nu
 }
 
 // Generate realistic technical candles (60 candles) around current spot level
-function generateHistoricalCandles(count: number = 60, currentSpot: number = 3974.19) {
+function generateHistoricalCandles(count = 60, currentSpot = 3974.19) {
   const candles = [];
   let price = currentSpot - 35;
   const now = Date.now();
@@ -116,7 +119,7 @@ function generateHistoricalCandles(count: number = 60, currentSpot: number = 397
 }
 
 // Technical indicator calculations
-function calculateIndicators(candles: { close: number; high: number; low: number }[]) {
+function calculateIndicators(candles) {
   const closes = candles.map((c) => c.close);
   const n = closes.length;
 
@@ -138,7 +141,7 @@ function calculateIndicators(candles: { close: number; high: number; low: number
     }
   }
 
-  const calcEMA = (period: number) => {
+  const calcEMA = (period) => {
     const k = 2 / (period + 1);
     let ema = closes[0];
     for (let i = 1; i < n; i++) {
@@ -201,7 +204,7 @@ function calculateIndicators(candles: { close: number; high: number; low: number
 }
 
 // Generate Paotang partner quotes (MTS, YLG, Aurora)
-function getPartnerQuotes(spot: number, usdThb: number) {
+function getPartnerQuotes(spot, usdThb) {
   const thaiGold = calculateThaiGoldPrice(spot, usdThb);
   const baseThaiSell = thaiGold.associationSell;
 
@@ -258,11 +261,7 @@ function getPartnerQuotes(spot: number, usdThb: number) {
 }
 
 // Formulate 1-Week Speculation Plan with 98%+ Confluence Scoring Engine
-function formulateSpeculationPlan(
-  spot: number,
-  usdThb: number,
-  indicators: ReturnType<typeof calculateIndicators>
-) {
+function formulateSpeculationPlan(spot, usdThb, indicators) {
   const thaiGold = calculateThaiGoldPrice(spot, usdThb);
   const rsi = indicators.rsi;
   const macdHist = indicators.macd.histogram;
@@ -272,7 +271,7 @@ function formulateSpeculationPlan(
 
   let trendScore = 17.5;
   let trendDesc = 'แนวโน้มทรงตัวในกรอบ Sideway';
-  let trendStatus: 'EXCELLENT' | 'GOOD' | 'NEUTRAL' | 'WAIT' = 'GOOD';
+  let trendStatus = 'GOOD';
   if (isStrongUptrend) {
     trendScore = 19.8;
     trendDesc = 'ขาขึ้นแข็งแกร่ง ราคายืนเหนือ EMA20/50/200 เรียงตัวสมบูรณ์';
@@ -289,7 +288,7 @@ function formulateSpeculationPlan(
 
   let momentumScore = 17.0;
   let momentumDesc = 'โมเมนตัมปานกลาง RSI อยู่ในโซนกลาง';
-  let momentumStatus: 'EXCELLENT' | 'GOOD' | 'NEUTRAL' | 'WAIT' = 'GOOD';
+  let momentumStatus = 'GOOD';
   if (rsi <= 45 && macdHist >= -1.0) {
     momentumScore = 19.7;
     momentumDesc = 'RSI พักตัวในโซนทองคำพร้อมฟื้นตัว (Bullish Divergence Setup)';
@@ -310,7 +309,7 @@ function formulateSpeculationPlan(
 
   let volScore = 18.0;
   let volDesc = 'ทดสอบแนวรับ Bollinger กลาง';
-  let volStatus: 'EXCELLENT' | 'GOOD' | 'NEUTRAL' | 'WAIT' = 'GOOD';
+  let volStatus = 'GOOD';
   if (distFromS1 < 0.015 || spot <= indicators.bollinger.lower * 1.01) {
     volScore = 19.6;
     volDesc = 'ราคาทดสอบแนวรับ Pivot S1 / Lower Band แล้วมีแรงเด้งรับทันที';
@@ -327,7 +326,7 @@ function formulateSpeculationPlan(
 
   let forexScore = 19.8;
   let forexDesc = 'ค่าเงินบาทมีเสถียรภาพ + สเปรด MTS Gold แคบพิเศษ 0.40$ คืนทุนไว';
-  let forexStatus: 'EXCELLENT' | 'GOOD' | 'NEUTRAL' | 'WAIT' = 'EXCELLENT';
+  let forexStatus = 'EXCELLENT';
   if (usdThb >= 33.5 && usdThb <= 35.5) {
     forexScore = 19.8;
     forexDesc = 'ค่าเงินบาทแกว่งตัวในกรอบสมดุล หนุนราคาขายคืนทำกำไร ฿ ได้คุ้มค่า';
@@ -341,20 +340,14 @@ function formulateSpeculationPlan(
   const weeklyTimingScore = 19.7;
   const weeklyTimingDesc =
     'รอบเวลาสัปดาห์ (วันจันทร์ ➔ ศุกร์): มีเวลาถือครอง 5 วันเต็ม เหมาะตั้งขายล่วงหน้า +5%';
-  const weeklyTimingStatus: 'EXCELLENT' | 'GOOD' | 'NEUTRAL' | 'WAIT' = 'EXCELLENT';
+  const weeklyTimingStatus = 'EXCELLENT';
 
   const totalConfluence = Number(
     (trendScore + momentumScore + volScore + forexScore + weeklyTimingScore).toFixed(1)
   );
   const isConfluence98Reached = totalConfluence >= 98.0;
 
-  let signal:
-    | 'SUPER STRONG BUY (98%+)'
-    | 'STRONG BUY'
-    | 'BUY'
-    | 'ACCUMULATE'
-    | 'TAKE PROFIT'
-    | 'WAIT';
+  let signal;
   let signalReason = '';
   const riskRewardRatio = 3.2;
   const targetHoldDays = 'วันจันทร์ ➔ วันศุกร์ (ไม่ถือข้ามสัปดาห์)';
@@ -516,15 +509,15 @@ app.get('/api/market/overview', (req, res) => {
       speculationPlan,
       candles: candles.slice(-30),
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Server error' });
   }
 });
 
 // API: Sync or Calibrate Gold Price with Paotang / Live Market
 app.post('/api/market/sync-price', async (req, res) => {
   try {
-    const { spot, usdThb, mode } = req.body;
+    const { spot, usdThb, mode } = req.body || {};
 
     if (mode === 'LIVE_API') {
       await fetchLiveMarketData();
@@ -553,14 +546,14 @@ app.post('/api/market/sync-price', async (req, res) => {
       spot: baseSpotGold,
       usdThb: baseUsdThb,
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Sync error' });
   }
 });
 
 // API: Manual trigger to simulate price change
 app.post('/api/market/simulate-tick', (req, res) => {
-  const { direction, delta } = req.body;
+  const { direction, delta } = req.body || {};
   const change = (delta || 5.0) * (direction === 'down' ? -1 : 1);
   baseSpotGold = Number((baseSpotGold + change).toFixed(2));
   res.json({ success: true, newSpot: baseSpotGold });
@@ -591,7 +584,7 @@ app.post('/api/gemini/analyze', async (req, res) => {
       });
     }
 
-    const { spot, usdThb, rsi, macdHist, signal } = req.body;
+    const { spot, usdThb, rsi, macdHist, signal } = req.body || {};
 
     const prompt = `
 คุณเป็นผู้เชี่ยวชาญด้านการลงทุนทองคำและการเทรดทองคำออนไลน์ผ่านแอป "เป๋าตัง" (Paotang Gold Wallet - พันธมิตร MTS Gold, YLG, Aurora)
@@ -619,6 +612,7 @@ app.post('/api/gemini/analyze', async (req, res) => {
 }
 `;
 
+    const ai = getGenAI();
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: prompt,
@@ -629,9 +623,9 @@ app.post('/api/gemini/analyze', async (req, res) => {
 
     const parsed = JSON.parse(response.text || '{}');
     res.json({ success: true, aiAnalysis: parsed });
-  } catch (err: any) {
-    console.error('Gemini API notice (using dynamic market fallback):', err.message);
-    const { spot, usdThb, rsi, signal } = req.body;
+  } catch (err) {
+    console.error('Gemini API notice (using dynamic market fallback):', err?.message || err);
+    const { spot, usdThb, rsi, signal } = req.body || {};
     const currentSpotVal = spot || baseSpotGold;
     const currentThbVal = usdThb || baseUsdThb;
     const isBull = (rsi || 50) < 60;
@@ -678,7 +672,7 @@ app.get('/api/notify/telegram/status', (req, res) => {
 // API: Auto-detect Telegram Group / Chat IDs from recent bot updates
 app.post('/api/notify/telegram/detect-chat', async (req, res) => {
   try {
-    const { botToken } = req.body;
+    const { botToken } = req.body || {};
     const envBotToken =
       process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'MY_TELEGRAM_BOT_TOKEN'
         ? process.env.TELEGRAM_BOT_TOKEN
@@ -696,7 +690,7 @@ app.post('/api/notify/telegram/detect-chat', async (req, res) => {
     const response = await fetch(
       `https://api.telegram.org/bot${activeBotToken}/getUpdates?limit=25`
     );
-    const data: any = await response.json().catch(() => ({}));
+    const data = await response.json().catch(() => ({}));
 
     if (!response.ok || !data.ok) {
       return res.status(response.status || 400).json({
@@ -708,10 +702,7 @@ app.post('/api/notify/telegram/detect-chat', async (req, res) => {
       });
     }
 
-    const chatMap = new Map<
-      string,
-      { id: string; title: string; type: string; username?: string }
-    >();
+    const chatMap = new Map();
     for (const upd of data.result || []) {
       const chat =
         upd.message?.chat ||
@@ -744,15 +735,15 @@ app.post('/api/notify/telegram/detect-chat', async (req, res) => {
           ? `พบ ${chats.length} ห้องแชท/กลุ่มที่เชื่อมต่อกับบอทแล้ว`
           : 'ยังไม่พบข้อความล่าสุดในกลุ่ม กรุณาดึงบอทเข้ากลุ่มแล้วพิมพ์ข้อความทักทายในกลุ่ม เช่น /start จากนั้นกดค้นหาอีกครั้ง',
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Detect error' });
   }
 });
 
 // API: Send Telegram Bot Notification to Group / Channel / Chat
 app.post('/api/notify/telegram', async (req, res) => {
   try {
-    const { botToken, chatId, message, mock, parseMode } = req.body;
+    const { botToken, chatId, message, mock, parseMode } = req.body || {};
     const envBotToken =
       process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_BOT_TOKEN !== 'MY_TELEGRAM_BOT_TOKEN'
         ? process.env.TELEGRAM_BOT_TOKEN
@@ -789,7 +780,7 @@ app.post('/api/notify/telegram', async (req, res) => {
       });
     }
 
-    const payload: Record<string, any> = {
+    const payload = {
       chat_id: activeChatId,
       text: message,
       disable_web_page_preview: true,
@@ -806,7 +797,7 @@ app.post('/api/notify/telegram', async (req, res) => {
       body: JSON.stringify(payload),
     });
 
-    const tgData: any = await response.json().catch(() => ({}));
+    const tgData = await response.json().catch(() => ({}));
 
     if (response.ok && tgData.ok) {
       return res.json({
@@ -834,8 +825,8 @@ app.post('/api/notify/telegram', async (req, res) => {
       error: errorMessage,
       details: tgData,
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Telegram error' });
   }
 });
 

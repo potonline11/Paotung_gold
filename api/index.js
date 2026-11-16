@@ -1,6 +1,6 @@
-import app from '../serverApp';
+import app from '../serverApp.js';
 
-export default function handler(req: any, res: any) {
+export default function handler(req, res) {
   // Normalize Vercel rewrite path (/api/index?__vercel_path=...) back to /api/...
   if (req.url && req.url.startsWith('/api/index')) {
     try {
