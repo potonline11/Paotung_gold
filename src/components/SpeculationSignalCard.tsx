@@ -178,7 +178,7 @@ export const SpeculationSignalCard: React.FC<Props> = ({
                   : 'bg-amber-500/20 text-amber-300'
               }`}
             >
-              {is98Passed ? '✓ ผ่านเกณฑ์ 98% ยิงแจ้งเตือน LINE' : 'สะสมพลัง รอเกณฑ์ 98%'}
+              {is98Passed ? '✓ ผ่านเกณฑ์ 98% ยิงแจ้งเตือน Telegram' : 'สะสมพลัง รอเกณฑ์ 98%'}
             </span>
           </div>
         </div>

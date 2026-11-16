@@ -62,7 +62,7 @@ export const Header: React.FC<Props> = ({ onOpenAiAnalysis, activeTab, onSelectT
               activeTab === 'alerts' ? 'text-amber-400 font-semibold' : ''
             }`}
           >
-            แจ้งเตือน LINE & Telegram
+            แจ้งเตือน Telegram
           </button>
         </nav>
 

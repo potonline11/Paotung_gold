@@ -283,7 +283,7 @@ export const PaotangOrderPlanner: React.FC<Props> = ({
               {isAlertAdded ? <Check className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
               <span>
                 {isAlertAdded
-                  ? 'เพิ่มเข้าการแจ้งเตือน LINE เรียบร้อยแล้ว!'
+                  ? 'เพิ่มเข้าการแจ้งเตือน Telegram เรียบร้อยแล้ว!'
                   : `ตั้งแจ้งเตือนเมื่อราคาแตะ $${calculatedPrice.toFixed(2)} ทันที`}
               </span>
             </button>

@@ -13,7 +13,7 @@ import { PartnerCards } from './components/PartnerCards';
 import { TechnicalIndicators } from './components/TechnicalIndicators';
 import { ProfitCalculator } from './components/ProfitCalculator';
 import { PaotangOrderPlanner } from './components/PaotangOrderPlanner';
-import { LineAlertsManager } from './components/LineAlertsManager';
+import { TelegramAlertsManager } from './components/TelegramAlertsManager';
 import { AiAnalysisModal } from './components/AiAnalysisModal';
 import { Bell, ShieldCheck, Zap, BookOpen, AlertCircle } from 'lucide-react';
 
@@ -63,7 +63,6 @@ export default function App() {
         const parsed = JSON.parse(saved);
         return {
           enabled: parsed.enabled ?? true,
-          enableLineAlerts: parsed.enableLineAlerts ?? true,
           enableTelegramAlerts: parsed.enableTelegramAlerts ?? true,
           strict98PercentOnly: parsed.strict98PercentOnly ?? true, // Default STRICT 98%+ to prevent spam
           weeklyScheduleOnly: parsed.weeklyScheduleOnly ?? true,
@@ -77,7 +76,6 @@ export default function App() {
     }
     return {
       enabled: true,
-      enableLineAlerts: true,
       enableTelegramAlerts: true,
       strict98PercentOnly: true, // Only alert when confluence >= 98%
       weeklyScheduleOnly: true, // Monday Entry -> Friday Exit plan
@@ -95,11 +93,6 @@ export default function App() {
   };
 
   const [triggeredToast, setTriggeredToast] = useState<string | null>(null);
-  const [serverLineSecrets, setServerLineSecrets] = useState({
-    hasEnvToken: false,
-    hasEnvUserId: false,
-    configuredViaSecrets: false,
-  });
   const [serverTelegramSecrets, setServerTelegramSecrets] = useState({
     hasEnvBotToken: false,
     hasEnvChatId: false,
@@ -136,29 +129,9 @@ export default function App() {
     localStorage.setItem('paotang_gold_alerts', JSON.stringify(alerts));
   }, [alerts]);
 
-  // Broadcast helper: sends alert to all enabled & configured channels (LINE OA + Telegram Group)
+  // Broadcast helper: sends alert to configured Telegram Group
   const broadcastSignalNotification = useCallback(
     (message: string) => {
-      const channelAccessToken =
-        localStorage.getItem('paotang_line_channel_token') ||
-        localStorage.getItem('paotang_line_token');
-      const userId = localStorage.getItem('paotang_line_user_id');
-      const canSendLine =
-        (autoSettings.enableLineAlerts ?? true) &&
-        ((Boolean(channelAccessToken) && Boolean(userId)) || serverLineSecrets.configuredViaSecrets);
-
-      if (canSendLine) {
-        fetch('/api/notify/line', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            channelAccessToken,
-            userId,
-            message,
-          }),
-        }).catch(() => {});
-      }
-
       const botToken = localStorage.getItem('paotang_telegram_bot_token');
       const chatId = localStorage.getItem('paotang_telegram_chat_id');
       const canSendTelegram =
@@ -177,14 +150,9 @@ export default function App() {
         }).catch(() => {});
       }
 
-      return { canSendLine, canSendTelegram };
+      return { canSendTelegram };
     },
-    [
-      autoSettings.enableLineAlerts,
-      autoSettings.enableTelegramAlerts,
-      serverLineSecrets.configuredViaSecrets,
-      serverTelegramSecrets.configuredViaSecrets,
-    ]
+    [autoSettings.enableTelegramAlerts, serverTelegramSecrets.configuredViaSecrets]
   );
 
   // Check alert triggers
@@ -226,24 +194,15 @@ export default function App() {
     (data: MarketOverviewData) => {
       if (!autoSettings.enabled) return;
 
-      const lineToken =
-        localStorage.getItem('paotang_line_channel_token') ||
-        localStorage.getItem('paotang_line_token');
-      const lineUserId = localStorage.getItem('paotang_line_user_id');
-      const hasLine =
-        (autoSettings.enableLineAlerts ?? true) &&
-        ((Boolean(lineToken) && Boolean(lineUserId)) || serverLineSecrets.configuredViaSecrets);
-
       const tgBotToken = localStorage.getItem('paotang_telegram_bot_token');
       const tgChatId = localStorage.getItem('paotang_telegram_chat_id');
       const hasTelegram =
         (autoSettings.enableTelegramAlerts ?? true) &&
         ((Boolean(tgBotToken) && Boolean(tgChatId)) || serverTelegramSecrets.configuredViaSecrets);
 
-      if (!hasLine && !hasTelegram) return;
+      if (!hasTelegram) return;
 
-      const channelLabel =
-        hasLine && hasTelegram ? 'LINE & Telegram' : hasTelegram ? 'กลุ่ม Telegram' : 'LINE OA';
+      const channelLabel = 'กลุ่ม Telegram';
 
       const now = Date.now();
       const cooldownMs = (autoSettings.cooldownMinutes || 360) * 60 * 1000;
@@ -343,7 +302,6 @@ export default function App() {
       autoSettings,
       playAlertChime,
       broadcastSignalNotification,
-      serverLineSecrets.configuredViaSecrets,
       serverTelegramSecrets.configuredViaSecrets,
     ]
   );
@@ -365,21 +323,8 @@ export default function App() {
     }
   }, [checkAlertTriggers, checkAutoTradeTriggers]);
 
-  // Check AI Studio Secrets status for LINE & Telegram notifications
+  // Check Server Environment Variables / Secrets status for Telegram notifications
   useEffect(() => {
-    fetch('/api/notify/line/status')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          setServerLineSecrets({
-            hasEnvToken: Boolean(data.hasEnvToken),
-            hasEnvUserId: Boolean(data.hasEnvUserId),
-            configuredViaSecrets: Boolean(data.configuredViaSecrets),
-          });
-        }
-      })
-      .catch(() => {});
-
     fetch('/api/notify/telegram/status')
       .then((res) => res.json())
       .then((data) => {
@@ -662,15 +607,14 @@ export default function App() {
           />
         </section>
 
-        {/* Section 6: Automated LINE Alerts Manager */}
+        {/* Section 6: Automated Telegram Alerts Manager */}
         <section id="alerts">
-          <LineAlertsManager
+          <TelegramAlertsManager
             currentSpot={marketData.rates.xauUsd}
             currentThaiGold={marketData.thaiGold.associationSell}
             speculationPlan={marketData.speculationPlan}
             alerts={alerts}
             autoSettings={autoSettings}
-            serverLineSecrets={serverLineSecrets}
             serverTelegramSecrets={serverTelegramSecrets}
             onUpdateAutoSettings={handleUpdateAutoSettings}
             onAddAlert={handleAddAlert}

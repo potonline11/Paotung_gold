@@ -173,7 +173,6 @@ export interface AiMarketAnalysis {
 
 export interface AutoTradeAlertSettings {
   enabled: boolean;
-  enableLineAlerts?: boolean;
   enableTelegramAlerts?: boolean;
   strict98PercentOnly: boolean; // Only alert when all factors combine to >= 98%
   weeklyScheduleOnly: boolean; // Focus on Monday Entry -> Friday Exit cycle

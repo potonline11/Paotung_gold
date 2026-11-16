@@ -1,6 +1,6 @@
 {
   "name": "Paotang Gold Signal & Alert - ระบบวิเคราะห์และแจ้งเตือนเก็งกำไรทองคำเป๋าตัง",
-  "description": "ระบบวิเคราะห์สัญญาณเทรดทองคำเป๋าตัง (Paotang Gold Wallet) อ้างอิง XAU/USD, USD/THB, สมาคมค้าทองคำ และร้านทองพันธมิตร MTS, YLG, Aurora พร้อม AI วิเคราะห์กลยุทธ์เก็งกำไรระยะสั้น 1 สัปดาห์ และระบบแจ้งเตือน LINE Notify",
+  "description": "ระบบวิเคราะห์สัญญาณเทรดทองคำเป๋าตัง (Paotang Gold Wallet) อ้างอิง XAU/USD, USD/THB, สมาคมค้าทองคำ และร้านทองพันธมิตร MTS, YLG, Aurora พร้อม AI วิเคราะห์กลยุทธ์เก็งกำไรระยะสั้น 1 สัปดาห์ และระบบแจ้งเตือนกลุ่ม Telegram อัตโนมัติ",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
