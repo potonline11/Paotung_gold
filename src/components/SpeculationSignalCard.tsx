@@ -19,6 +19,7 @@ interface Props {
   plan: SpeculationPlan;
   currentSpot: number;
   currentThaiGold: number;
+  confluenceThreshold?: number;
   onSetQuickAlert: (type: 'ENTRY' | 'TP1' | 'TP2' | 'TP5' | 'SL') => void;
   onOpenAiAnalysis: () => void;
 }
@@ -27,14 +28,17 @@ export const SpeculationSignalCard: React.FC<Props> = ({
   plan,
   currentSpot,
   currentThaiGold,
+  confluenceThreshold = 98,
   onSetQuickAlert,
   onOpenAiAnalysis,
 }) => {
-  const score = plan.confidenceScore || 98.6;
-  const is98Passed = score >= 98.0 || plan.factorBreakdown?.isConfluence98Reached;
+  const score = plan.confidenceScore || 98.0;
+  const isThresholdPassed =
+    score >= confluenceThreshold ||
+    (confluenceThreshold <= 98 && Boolean(plan.factorBreakdown?.isConfluence98Reached));
   const weekly = plan.weeklyStrategy || {
-    entryDay: 'วันจันทร์ (Monday Open / Dip)',
-    exitDay: 'วันศุกร์ (Friday Close)',
+    entryDay: 'แจ้งเตือนเตรียมซื้อทันทีทุกวัน (เมื่อคะแนนเกินมาตรฐาน ไม่ต้องรอวันจันทร์)',
+    exitDay: 'ตั้งขายล่วงหน้า 7 วันบนเป๋าตัง (TP +5.00%)',
     targetProfitPercent: 5.0,
     targetSpotPrice: Number((currentSpot * 1.05).toFixed(2)),
     gainUsdPerOz: Number((currentSpot * 0.05).toFixed(2)),
@@ -42,19 +46,19 @@ export const SpeculationSignalCard: React.FC<Props> = ({
     gainThaiPerBaht: Math.round((currentThaiGold * 1.05) / 50) * 50 - currentThaiGold,
     paotangOrderNote: 'ตั้งราคาขายล่วงหน้า +5.00% บนเป๋าตัง อายุ 7 วัน',
     rules: [
-      '1. เข้าซื้อในวันจันทร์ เมื่อคะแนนปัจจัยรอบด้านแตะระดับ ≥ 98%',
-      '2. ตั้งราคาขายล่วงหน้าบนเป๋าตังทันทีที่เป้า TP +5.00% (อายุคำสั่งสูงสุด 7 วัน)',
-      '3. หากแตะเป้าระหว่างสัปดาห์ คำสั่งขายจะแมตช์อัตโนมัติ ไม่ต้องเฝ้าจอ',
-      '4. ปิดสถานะขายทำกำไรทั้งหมดภายในวันศุกร์ ไม่ถือข้ามเสาร์-อาทิตย์ เพื่อเลี่ยง Gap ความเสี่ยงตลาดปิด',
+      `1. ระบบแจ้งเตือนเตรียมเข้าซื้อทันทีทุกวัน เมื่อมาตรวัดคะแนนปัจจัยรอบด้านเกินมาตรฐาน ≥ ${confluenceThreshold}% โดยไม่ต้องรอถึงวันจันทร์`,
+      '2. เมื่อได้รับแจ้งเตือน ให้เช็กจังหวะราคาบนแอปเป๋าตังและทยอยเข้าซื้อตามกรอบ Entry',
+      '3. ตั้งราคาขายล่วงหน้าบนเป๋าตังทันทีที่เป้า TP +5.00% (อายุคำสั่งสูงสุด 7 วัน)',
+      '4. หากราคาวิ่งถึงเป้า คำสั่งขายจะแมตช์อัตโนมัติ และตั้ง Stop Loss เพื่อคุมความเสี่ยงทุกครั้ง',
     ],
   };
 
   const getSignalBadge = () => {
-    if (plan.signal === 'SUPER STRONG BUY (98%+)' || is98Passed) {
+    if (plan.signal === 'SUPER STRONG BUY (98%+)' || isThresholdPassed) {
       return {
         bg: 'bg-gradient-to-r from-emerald-500/20 via-amber-500/20 to-emerald-500/10 border-emerald-500/50 text-emerald-300',
-        title: '🔥 SUPER STRONG BUY (คะแนนปัจจัยรอบด้าน 98%+)',
-        desc: 'ทุกปัจจัยผ่านเกณฑ์ความแม่นยำสูงสุด! เหมาะเข้าซื้อรอบสัปดาห์เพื่อรอขายล็อกกำไร TP +5.00% ภายในวันศุกร์นี้',
+        title: `🔥 เตรียมเข้าซื้อทันที! (คะแนนปัจจัยเกินมาตรฐาน ${score}% ≥ ${confluenceThreshold}%)`,
+        desc: 'มาตรวัดปัจจัยรอบด้านผ่านเกณฑ์มาตรฐานแล้ว! ระบบแจ้งเตือนเตรียมเข้าซื้อทันทีโดยไม่ต้องรอถึงวันจันทร์ ตั้งเป้าขาย TP +5.00%',
       };
     }
     switch (plan.signal) {
@@ -62,31 +66,31 @@ export const SpeculationSignalCard: React.FC<Props> = ({
         return {
           bg: 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400',
           title: 'STRONG BUY (สัญญาณซื้อแรง)',
-          desc: 'โอกาสทำกำไรสูง เหมาะเข้าซื้อสะสมเพื่อรอดีดทำกำไร',
+          desc: 'โอกาสทำกำไรสูง เหมาะเตรียมเข้าซื้อสะสมเพื่อรอดีดทำกำไร',
         };
       case 'BUY':
         return {
           bg: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400',
           title: 'BUY (สัญญาณซื้อย่อตัว)',
-          desc: 'ราคาทดสอบแนวรับสำคัญ เหมาะเข้าเปิดสถานะไม้แรก',
+          desc: 'ราคาทดสอบแนวรับสำคัญ เหมาะเตรียมเปิดสถานะไม้แรก',
         };
       case 'ACCUMULATE':
         return {
           bg: 'bg-blue-500/10 border-blue-500/30 text-blue-400',
           title: 'ACCUMULATE (ทยอยสะสม)',
-          desc: 'ตลาดอยู่ในโซนพักฐาน แนะนำตั้งรับตามแนวรับ ไม่ไล่ราคา',
+          desc: 'ตลาดอยู่ในโซนพักฐาน รอคะแนนปัจจัยรวมเกินเกณฑ์มาตรฐานเพื่อแจ้งเตือนเตรียมซื้อ',
         };
       case 'TAKE PROFIT':
         return {
           bg: 'bg-amber-500/15 border-amber-500/40 text-amber-400',
           title: 'TAKE PROFIT (ปิดทำกำไร)',
-          desc: 'ราคาแตะเป้าหมาย 1 สัปดาห์ หรือ RSI ร้อนแรงเกินไป ควรทยอยขายทำกำไร',
+          desc: 'ราคาแตะเป้าหมาย หรือ RSI ร้อนแรงเกินไป ควรทยอยขายทำกำไร',
         };
       default:
         return {
           bg: 'bg-slate-800 border-slate-700 text-slate-300',
-          title: 'WAIT & SEE (รอสัญญาณชัดเจน)',
-          desc: 'รอคะแนนปัจจัยครบ 98% ก่อนเปิดออเดอร์เพื่อความปลอดภัยสูงสุด',
+          title: 'WAIT & SEE (รอคะแนนเกินเกณฑ์)',
+          desc: `รอมาตรวัดคะแนนปัจจัยรอบด้านเกินมาตรฐาน (${confluenceThreshold}%) ก่อนแจ้งเตือนเตรียมซื้อ`,
         };
     }
   };
@@ -105,15 +109,15 @@ export const SpeculationSignalCard: React.FC<Props> = ({
             <span className="p-1.5 bg-amber-500/20 text-amber-300 rounded-lg">
               <Target className="w-5 h-5" />
             </span>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <span>กลยุทธ์เก็งกำไรสัปดาห์ (วันจันทร์ ➔ วันศุกร์ TP +5.00%)</span>
+            <h2 className="text-lg font-bold text-white flex flex-wrap items-center gap-2">
+              <span>ระบบแจ้งเตือนเตรียมซื้ออัจฉริยะ (ไม่ต้องรอวันจันทร์ · เป้า TP +5.00%)</span>
               <span className="text-[11px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">
-                Confluence 98%+
+                เกณฑ์มาตรฐาน ≥ {confluenceThreshold}%
               </span>
             </h2>
           </div>
           <p className="text-xs text-slate-400">
-            ระบบคำนวณและกรองสัญญาณซื้อที่คะแนนปัจจัยรอบด้านเกิน 98% เทรดวันจันทร์และขายล็อกกำไรในวันศุกร์ ไม่ถือข้ามสุดสัปดาห์
+            สแกนตลาดเรียลไทม์ทุกวัน ทันทีที่มาตรวัดคะแนนปัจจัยรอบด้านเกินมาตรฐาน (≥ {confluenceThreshold}%) ระบบจะแจ้งเตือนเตรียมเข้าซื้อทันทีโดยไม่ต้องรอถึงวันจันทร์
           </p>
         </div>
 
@@ -139,7 +143,7 @@ export const SpeculationSignalCard: React.FC<Props> = ({
           <div className="flex items-center gap-3 text-xs font-mono-numbers">
             <div className="flex items-center gap-1 text-slate-300">
               <Clock className="w-3.5 h-3.5 text-amber-400" />
-              <span>รอบเทรด: <strong className="text-white">จันทร์ ➔ ศุกร์</strong></span>
+              <span>จังหวะเตือน: <strong className="text-emerald-300">ทันทีทุกวัน (ไม่ต้องรอวันจันทร์)</strong></span>
             </div>
             <span className="text-slate-400">|</span>
             <div className="text-slate-300">
@@ -157,7 +161,7 @@ export const SpeculationSignalCard: React.FC<Props> = ({
         </p>
       </div>
 
-      {/* 98%+ MULTI-FACTOR CONFLUENCE EVALUATOR (มาตรวัดคะแนนปัจจัยรอบด้าน) */}
+      {/* MULTI-FACTOR CONFLUENCE EVALUATOR (มาตรวัดคะแนนปัจจัยรอบด้าน) */}
       <div className="bg-slate-950/90 border border-emerald-500/30 rounded-xl p-4 space-y-3.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -167,18 +171,22 @@ export const SpeculationSignalCard: React.FC<Props> = ({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-400">คะแนนความเชื่อมั่นรวม:</span>
+            <span className="text-xs text-slate-400">
+              มาตรฐาน ≥ {confluenceThreshold}% · คะแนนรวม:
+            </span>
             <span className="text-base font-extrabold text-emerald-400 font-mono-numbers bg-emerald-500/10 px-2.5 py-0.5 rounded-lg border border-emerald-500/30">
               {score}% / 100%
             </span>
             <span
               className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                is98Passed
+                isThresholdPassed
                   ? 'bg-emerald-500 text-slate-950 font-extrabold'
                   : 'bg-amber-500/20 text-amber-300'
               }`}
             >
-              {is98Passed ? '✓ ผ่านเกณฑ์ 98% ยิงแจ้งเตือน Telegram' : 'สะสมพลัง รอเกณฑ์ 98%'}
+              {isThresholdPassed
+                ? '✓ เกินมาตรฐาน — แจ้งเตือนเตรียมซื้อทันที!'
+                : `สะสมพลัง (รอ ≥ ${confluenceThreshold}%)`}
             </span>
           </div>
         </div>
@@ -187,7 +195,7 @@ export const SpeculationSignalCard: React.FC<Props> = ({
         <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-700">
           <div
             className={`h-full rounded-full transition-all duration-700 ${
-              is98Passed
+              isThresholdPassed
                 ? 'bg-gradient-to-r from-emerald-500 via-amber-400 to-emerald-400'
                 : 'bg-amber-500'
             }`}
@@ -249,47 +257,48 @@ export const SpeculationSignalCard: React.FC<Props> = ({
             </p>
           </div>
 
-          {/* Factor 5: Weekly Swing Cycle */}
+          {/* Factor 5: Real-Time Session Readiness */}
           <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800">
             <div className="flex items-center justify-between text-[11px] mb-1">
-              <span className="text-slate-400 font-medium">5. รอบเวลา จันทร์-ศุกร์</span>
+              <span className="text-slate-400 font-medium">5. พร้อมเตือนทันที 24/7</span>
               <span className="text-emerald-400 font-mono font-bold">
-                {plan.factorBreakdown?.weeklyTiming.score ?? 19.7}/20
+                {plan.factorBreakdown?.weeklyTiming.score ?? 19.8}/20
               </span>
             </div>
             <p className="text-[10px] text-slate-300 line-clamp-2">
-              {plan.factorBreakdown?.weeklyTiming.description ?? 'กรอบ 5 วันเต็ม เหมาะตั้งขายล่วงหน้า +5%'}
+              {plan.factorBreakdown?.weeklyTiming.description ??
+                'แจ้งเตือนเตรียมซื้อทันทีเมื่อคะแนนเกินมาตรฐาน ไม่ต้องรอวันจันทร์'}
             </p>
           </div>
         </div>
       </div>
 
-      {/* DEDICATED WEEKLY SWING STRATEGY BOX (วันจันทร์ ➔ วันศุกร์ TP +5.00%) */}
+      {/* DEDICATED INSTANT TRIGGER STRATEGY BOX (แจ้งเตือนเตรียมซื้อทันที ไม่ต้องรอวันจันทร์) */}
       <div className="bg-gradient-to-r from-amber-500/10 via-slate-950 to-emerald-500/10 border border-amber-500/40 rounded-xl p-4.5 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-amber-400" />
             <span className="font-extrabold text-white text-xs">
-              แผนเทรดรอบสัปดาห์ (วันจันทร์ ➔ ปิดขายวันศุกร์):
+              แผนเตรียมเข้าซื้ออัตโนมัติ (แจ้งเตือนทันทีเมื่อเกินมาตรฐาน ไม่ต้องรอวันจันทร์):
             </span>
           </div>
           <div className="text-xs text-amber-300 font-semibold flex items-center gap-1.5">
             <Flame className="w-3.5 h-3.5 fill-current text-amber-400" />
-            <span>เป้าหมายกำไร: <strong className="text-emerald-400 font-mono text-sm">+5.00% ต่อสัปดาห์</strong></span>
+            <span>เป้าหมายกำไร: <strong className="text-emerald-400 font-mono text-sm">+5.00% (ตั้งขายล่วงหน้า 7 วัน)</strong></span>
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-          {/* Col 1: Schedule & Action */}
+          {/* Col 1: Trigger Rules */}
           <div className="bg-slate-900/70 p-3 rounded-lg border border-slate-800/80 space-y-1">
             <span className="text-[11px] text-slate-400 font-medium block">
-              📅 ตารางรอบเวลาเทรด:
+              ⚡ เงื่อนไขแจ้งเตือนเตรียมซื้อ:
             </span>
             <div className="text-emerald-300 font-bold text-xs">
-              • วันจันทร์: เข้าซื้อสะสม (เมื่อ Confluence ≥ 98%)
+              • ทันทีที่ Confluence ≥ {confluenceThreshold}% (แจ้งเตือนทุกวัน ไม่รอวันจันทร์)
             </div>
             <div className="text-amber-300 font-bold text-xs">
-              • วันศุกร์: ปิดสถานะขายทำกำไร (ไม่ถือข้ามสัปดาห์)
+              • ซื้อแล้วตั้งขายล่วงหน้า TP +5.00% (อายุคำสั่ง 7 วัน)
             </div>
           </div>
 
@@ -416,8 +425,10 @@ export const SpeculationSignalCard: React.FC<Props> = ({
           <span>{plan.recommendedShop}</span>
         </div>
         <div className="flex items-center gap-2 text-slate-400">
-          <span>กฎเหล็กการเทรดสัปดาห์:</span>
-          <strong className="text-white font-mono-numbers">ซื้อจันทร์ (Confluence 98%) · ตั้งขายล่วงหน้า +5% · ปิดทำกำไรวันศุกร์</strong>
+          <span>กฎเหล็กการเทรด:</span>
+          <strong className="text-white font-mono-numbers">
+            คะแนน ≥ {confluenceThreshold}% เตรียมซื้อทันที (ไม่รอวันจันทร์) · ตั้งขายล่วงหน้า +5% (7 วัน)
+          </strong>
         </div>
       </div>
     </div>

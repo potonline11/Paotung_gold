@@ -33,8 +33,15 @@ export interface Indicators {
   };
 }
 
+export type GoldPurityType = '9999' | '965';
+export type ApiConnectionStatus = 'LIVE' | 'SYNCING' | 'FALLBACK' | 'ERROR';
+
 export interface ThaiGoldPrices {
   rawPrice: number;
+  gold9999Price?: number;
+  gold965Price?: number;
+  spreadOffsetThb?: number;
+  purity?: GoldPurityType;
   associationSell: number;
   associationBuy: number;
   ornamentSell: number;
@@ -174,8 +181,10 @@ export interface AiMarketAnalysis {
 export interface AutoTradeAlertSettings {
   enabled: boolean;
   enableTelegramAlerts?: boolean;
-  strict98PercentOnly: boolean; // Only alert when all factors combine to >= 98%
-  weeklyScheduleOnly: boolean; // Focus on Monday Entry -> Friday Exit cycle
+  strict98PercentOnly: boolean; // Alert whenever Multi-Factor Confluence >= confluenceThreshold
+  confluenceThreshold?: number; // Standard threshold % (default 98, adjustable e.g. 90/95/98)
+  instantAnyDayAlert?: boolean; // Alert immediately on any day without waiting for Monday
+  weeklyScheduleOnly?: boolean; // Legacy optional flag (defaults to false)
   notifyOnBuySignal: boolean;
   notifyOnTakeProfit: boolean;
   notifyOnRsiOversold: boolean;

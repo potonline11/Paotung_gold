@@ -20,15 +20,68 @@ function getGenAI() {
   });
 }
 
-// Real-time market state (auto-synced with live world XAU/USD & USD/THB)
-let baseSpotGold = 3872.77;
-let baseUsdThb = 33.9;
+// Real-time market state (auto-synced with live world XAU/USD & Frankfurter USD/THB)
+let baseSpotGold = 3770.6;
+let baseUsdThb = 33.85;
 let lastUpdate = new Date().toISOString();
 let lastLiveFetchAt = 0;
 let priceDataSource = 'LIVE_MARKET';
 const LIVE_CACHE_TTL_MS = 15000;
 
-// Fetch live XAU/USD spot and USD/THB FX rate
+async function fetchLiveUsdThb() {
+  // 1. Primary: Frankfurter v2 real-time rates (CORS-enabled, no daily open.er-api lag)
+  try {
+    const res = await fetch('https://api.frankfurter.dev/v2/rates?base=USD&quotes=THB', {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(4500),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const rate = Array.isArray(data) ? data[0]?.rate : data?.rates?.THB;
+      if (Number.isFinite(Number(rate)) && Number(rate) > 20) {
+        return Number(Number(rate).toFixed(3));
+      }
+    }
+  } catch {
+    // try next fallback
+  }
+
+  // 2. Fallback: Frankfurter v1 endpoint
+  try {
+    const res = await fetch('https://api.frankfurter.app/latest?from=USD&to=THB', {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(4500),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Number.isFinite(Number(data?.rates?.THB)) && Number(data.rates.THB) > 20) {
+        return Number(Number(data.rates.THB).toFixed(3));
+      }
+    }
+  } catch {
+    // try next fallback
+  }
+
+  // 3. Fallback: jsDelivr currency-api
+  try {
+    const res = await fetch(
+      'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json',
+      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(4500) }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (Number.isFinite(Number(data?.usd?.thb)) && Number(data.usd.thb) > 20) {
+        return Number(Number(data.usd.thb).toFixed(3));
+      }
+    }
+  } catch {
+    // fallback failed
+  }
+
+  return null;
+}
+
+// Fetch live XAU/USD spot and USD/THB FX rate (every 15s TTL)
 async function fetchLiveMarketData(force = false) {
   const now = Date.now();
   if (!force && lastLiveFetchAt > 0 && now - lastLiveFetchAt < LIVE_CACHE_TTL_MS) {
@@ -36,20 +89,18 @@ async function fetchLiveMarketData(force = false) {
   }
 
   try {
-    const [xauRes, fxRes] = await Promise.allSettled([
+    const [xauRes, liveThb] = await Promise.all([
       fetch('https://api.gold-api.com/price/XAU', {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(4500),
-      }),
-      fetch('https://open.er-api.com/v6/latest/USD', {
-        signal: AbortSignal.timeout(4500),
-      }),
+      }).catch(() => null),
+      fetchLiveUsdThb(),
     ]);
 
     let updatedSpot = false;
-    if (xauRes.status === 'fulfilled' && xauRes.value.ok) {
-      const xauJson = await xauRes.value.json();
-      if (xauJson?.price && Number(xauJson.price) > 1000) {
+    if (xauRes && xauRes.ok) {
+      const xauJson = await xauRes.json().catch(() => null);
+      if (xauJson?.price && Number.isFinite(Number(xauJson.price)) && Number(xauJson.price) > 1000) {
         baseSpotGold = Number(Number(xauJson.price).toFixed(2));
         updatedSpot = true;
       }
@@ -63,29 +114,26 @@ async function fetchLiveMarketData(force = false) {
         );
         if (cgRes.ok) {
           const cgData = await cgRes.json();
-          if (cgData['pax-gold']?.usd) {
-            baseSpotGold = Number(cgData['pax-gold'].usd.toFixed(2));
+          if (cgData['pax-gold']?.usd && Number.isFinite(Number(cgData['pax-gold'].usd))) {
+            baseSpotGold = Number(Number(cgData['pax-gold'].usd).toFixed(2));
             updatedSpot = true;
           }
         }
       } catch {
-        // Ignore fallback failure
+        // Keep last valid baseSpotGold
       }
     }
 
-    if (fxRes.status === 'fulfilled' && fxRes.value.ok) {
-      const fxData = await fxRes.value.json();
-      if (fxData?.rates?.THB && Number(fxData.rates.THB) > 20) {
-        baseUsdThb = Number(Number(fxData.rates.THB).toFixed(2));
-      }
+    if (liveThb && Number.isFinite(liveThb)) {
+      baseUsdThb = liveThb;
     }
 
-    if (updatedSpot) {
+    if (updatedSpot || liveThb) {
       lastLiveFetchAt = now;
       lastUpdate = new Date().toISOString();
       priceDataSource = 'LIVE_MARKET';
     }
-    return updatedSpot;
+    return updatedSpot || Boolean(liveThb);
   } catch (e) {
     console.error('Live market fetch notice (using last known spot):', e?.message || e);
     return false;
@@ -97,16 +145,19 @@ if (typeof process !== 'undefined' && process.env.VERCEL !== '1') {
   fetchLiveMarketData(true).catch(() => {});
 }
 
-// Helper to calculate Thai gold 96.5% price per baht
-export function calculateThaiGoldPrice(spot, usdThb, premium = 2.0) {
-  const purityFactor = 0.965;
+// Helper to calculate Thai gold prices per 1 baht-weight (99.99% & 96.5%)
+export function calculateThaiGoldPrice(spot, usdThb, offsetThb = 0) {
   const ozToGram = 31.1035;
   const bahtToGram = 15.244;
-  const rawPrice = ((spot + premium) / ozToGram) * bahtToGram * usdThb * purityFactor;
-  const roundedSell = Math.round(rawPrice / 50) * 50;
+  const gold9999Raw = spot * usdThb * (bahtToGram / ozToGram);
+  const gold965Raw = gold9999Raw * 0.965;
+  const roundedSell = Math.round((gold965Raw + offsetThb) / 50) * 50;
   const roundedBuy = roundedSell - 100;
   return {
-    rawPrice: Math.round(rawPrice),
+    rawPrice: Math.round(gold965Raw),
+    gold9999Price: Math.round(gold9999Raw),
+    gold965Price: Math.round(gold965Raw),
+    spreadOffsetThb: offsetThb,
     associationSell: roundedSell,
     associationBuy: roundedBuy,
     ornamentSell: roundedSell + 500,
@@ -115,7 +166,7 @@ export function calculateThaiGoldPrice(spot, usdThb, premium = 2.0) {
 }
 
 // Generate realistic technical candles (60 candles) around current spot level
-function generateHistoricalCandles(count = 60, currentSpot = 3974.19) {
+function generateHistoricalCandles(count = 60, currentSpot = 3770.6) {
   const candles = [];
   let price = currentSpot - 35;
   const now = Date.now();
@@ -368,39 +419,39 @@ function formulateSpeculationPlan(spot, usdThb, indicators) {
     forexStatus = 'GOOD';
   }
 
-  const weeklyTimingScore = 19.7;
-  const weeklyTimingDesc =
-    'รอบเวลาสัปดาห์ (วันจันทร์ ➔ ศุกร์): มีเวลาถือครอง 5 วันเต็ม เหมาะตั้งขายล่วงหน้า +5%';
-  const weeklyTimingStatus = 'EXCELLENT';
+  const realtimeTimingScore = 19.8;
+  const realtimeTimingDesc =
+    'พร้อมเข้าซื้อแบบเรียลไทม์ 24/7: ระบบแจ้งเตือนเตรียมซื้อทันทีเมื่อคะแนนเกินมาตรฐาน โดยไม่ต้องรอวันจันทร์';
+  const realtimeTimingStatus = 'EXCELLENT';
 
   const totalConfluence = Number(
-    (trendScore + momentumScore + volScore + forexScore + weeklyTimingScore).toFixed(1)
+    (trendScore + momentumScore + volScore + forexScore + realtimeTimingScore).toFixed(1)
   );
   const isConfluence98Reached = totalConfluence >= 98.0;
 
   let signal;
   let signalReason = '';
   const riskRewardRatio = 3.2;
-  const targetHoldDays = 'วันจันทร์ ➔ วันศุกร์ (ไม่ถือข้ามสัปดาห์)';
+  const targetHoldDays = 'เข้าซื้อทันทีเมื่อผ่านเกณฑ์ ➔ ตั้งขายล่วงหน้า TP +5.00% (สูงสุด 7 วัน)';
 
   if (isConfluence98Reached) {
     signal = 'SUPER STRONG BUY (98%+)';
-    signalReason = `คะแนนปัจจัยรอบด้านสูงถึง ${totalConfluence}% (High Confluence 98%+): โครงสร้างราคาขาขึ้น + จังหวะย่อทดสอบแนวรับ + ค่าเงินและสเปรด MTS ได้เปรียบ เหมาะเข้าซื้อเพื่อเทรดรอบสัปดาห์ ตั้งเป้า TP +5.00% ปิดขายภายในวันศุกร์นี้`;
+    signalReason = `คะแนนปัจจัยรอบด้านเกินมาตรฐาน (${totalConfluence}%): โครงสร้างราคาขาขึ้น + โมเมนตัม + แนวรับ + ค่าเงินและสเปรด MTS พร้อมสมบูรณ์ แนะนำเตรียมเข้าซื้อทันทีโดยไม่ต้องรอถึงวันจันทร์ ตั้งเป้าทำกำไร TP +5.00%`;
   } else if (rsi < 35 && macdHist > -1.5) {
     signal = 'STRONG BUY';
-    signalReason = `คะแนนปัจจัย ${totalConfluence}%: RSI เข้าสู่เขต Oversold พร้อมสัญญาณกลับตัว เหมาะช้อนซื้อสวิงทำกำไร`;
+    signalReason = `คะแนนปัจจัย ${totalConfluence}%: RSI เข้าสู่เขต Oversold พร้อมสัญญาณกลับตัว เหมาะเตรียมช้อนซื้อสวิงทำกำไร`;
   } else if (rsi < 48 && isUptrend) {
     signal = 'BUY';
-    signalReason = `คะแนนปัจจัย ${totalConfluence}%: ราคาย่อตัวทดสอบแนวรับเส้นค่าเฉลี่ยในแนวโน้มขาขึ้น จังหวะเข้าซื้อสะสม`;
+    signalReason = `คะแนนปัจจัย ${totalConfluence}%: ราคาย่อตัวทดสอบแนวรับเส้นค่าเฉลี่ยในแนวโน้มขาขึ้น จังหวะเตรียมเข้าซื้อสะสมทันที`;
   } else if (rsi >= 48 && rsi <= 62) {
     signal = 'ACCUMULATE';
-    signalReason = `คะแนนปัจจัย ${totalConfluence}%: ตลาดอยู่ในโซนพักฐาน แนะนำตั้งรับตามแนวรับ ไม่ไล่ราคา`;
+    signalReason = `คะแนนปัจจัย ${totalConfluence}%: ตลาดอยู่ในโซนพักฐาน รอคะแนนปัจจัยรวมเกินเกณฑ์มาตรฐานเพื่อแจ้งเตือนเตรียมซื้อ`;
   } else if (rsi > 70) {
     signal = 'TAKE PROFIT';
-    signalReason = `คะแนนปัจจัย ${totalConfluence}%: RSI เข้าสู่เขต Overbought เสี่ยงเกิดแรงขายทำกำไรระยะสั้น ควรปิดทำกำไร`;
+    signalReason = `คะแนนปัจจัย ${totalConfluence}%: RSI เข้าสู่เขต Overbought เสี่ยงเกิดแรงขายทำกำไรระยะสั้น ควรทยอยปิดทำกำไร`;
   } else {
     signal = 'WAIT';
-    signalReason = `คะแนนปัจจัย ${totalConfluence}%: ราคากำลังสร้างฐาน รอคะแนนคอนเฟิร์มครบ 98% ก่อนเปิดสถานะ`;
+    signalReason = `คะแนนปัจจัย ${totalConfluence}%: ราคากำลังสร้างฐาน รอคะแนนคอนเฟิร์มเกินเกณฑ์มาตรฐานก่อนแจ้งเตือนเตรียมเข้าซื้อ`;
   }
 
   const entrySpotMin = Number(Math.min(indicators.pivotPoints.s1, spot * 0.995).toFixed(2));
@@ -421,8 +472,8 @@ function formulateSpeculationPlan(spot, usdThb, indicators) {
   const gainThaiPerBaht = tp5Thai - thaiBase;
 
   const weeklyStrategy = {
-    entryDay: 'วันจันทร์ (Monday Open / Dip)',
-    exitDay: 'วันศุกร์ (Friday Close ก่อนปิดตลาดสุดสัปดาห์)',
+    entryDay: 'แจ้งเตือนเตรียมซื้อทันทีทุกวัน (เมื่อคะแนนเกินมาตรฐาน ไม่ต้องรอวันจันทร์)',
+    exitDay: 'ตั้งขายล่วงหน้า 7 วันบนเป๋าตัง (TP +5.00%) / ล็อกกำไรเมื่อถึงเป้า',
     targetProfitPercent: 5.0,
     entrySpotPrice: spot,
     targetSpotPrice: tp5Spot,
@@ -430,12 +481,12 @@ function formulateSpeculationPlan(spot, usdThb, indicators) {
     entryThaiPrice: thaiBase,
     targetThaiPrice: tp5Thai,
     gainThaiPerBaht,
-    paotangOrderNote: `แนะนำ: เมื่อกดซื้อแล้ว ให้เข้าเมนู "ขายทอง" > "ตั้งราคา" กำหนดขายที่ +5.00% ($${tp5Spot} USD หรือ ฿${tp5Thai.toLocaleString()} บาท) ระบบตั้งเวลาได้นานถึง 7 วัน จะจับคู่ขายล็อกกำไรอัตโนมัติเมื่อราคาวิ่งถึง`,
+    paotangOrderNote: `แนะนำ: เมื่อได้รับแจ้งเตือนเตรียมซื้อและกดซื้อแล้ว ให้เข้าเมนู "ขายทอง" > "ตั้งราคา" กำหนดขายที่ +5.00% ($${tp5Spot} USD หรือ ฿${tp5Thai.toLocaleString()} บาท) ตั้งเวลาได้นาน 7 วัน เพื่อล็อกกำไรอัตโนมัติ`,
     rules: [
-      '1. เข้าซื้อในวันจันทร์ เมื่อคะแนนปัจจัยรอบด้านแตะระดับ ≥ 98%',
-      '2. ตั้งราคาขายล่วงหน้าบนเป๋าตังทันทีที่เป้า TP +5.00% (อายุคำสั่งสูงสุด 7 วัน)',
-      '3. หากแตะเป้าระหว่างสัปดาห์ คำสั่งขายจะแมตช์อัตโนมัติ ไม่ต้องเฝ้าจอ',
-      '4. ปิดสถานะขายทำกำไรทั้งหมดภายในวันศุกร์ ไม่ถือข้ามเสาร์-อาทิตย์ เพื่อเลี่ยง Gap ความเสี่ยงตลาดปิด',
+      '1. ระบบแจ้งเตือนเตรียมเข้าซื้อทันทีทุกวัน (จันทร์–ศุกร์) เมื่อมาตรวัดคะแนนปัจจัยรอบด้านเกินมาตรฐาน ≥ 98% โดยไม่ต้องรอถึงวันจันทร์',
+      '2. เมื่อได้รับแจ้งเตือน ให้เช็กจังหวะราคาบนแอปเป๋าตังและทยอยเข้าซื้อตามกรอบ Entry',
+      '3. ตั้งราคาขายล่วงหน้าบนเป๋าตังทันทีที่เป้า TP +5.00% (อายุคำสั่งสูงสุด 7 วัน)',
+      '4. หากราคาวิ่งถึงเป้า ระบบจะจับคู่ขายล็อกกำไรอัตโนมัติ และตั้ง Stop Loss เพื่อคุมความเสี่ยงทุกครั้ง',
     ],
   };
 
@@ -469,11 +520,11 @@ function formulateSpeculationPlan(spot, usdThb, indicators) {
       description: forexDesc,
     },
     weeklyTiming: {
-      name: 'รอบปฏิทินสัปดาห์ (จันทร์ ➔ ศุกร์)',
-      score: weeklyTimingScore,
+      name: 'ความพร้อมเข้าซื้อทันที (Real-Time 24/7)',
+      score: realtimeTimingScore,
       maxScore: 20,
-      status: weeklyTimingStatus,
-      description: weeklyTimingDesc,
+      status: realtimeTimingStatus,
+      description: realtimeTimingDesc,
     },
     totalScore: totalConfluence,
     isConfluence98Reached,
@@ -482,7 +533,7 @@ function formulateSpeculationPlan(spot, usdThb, indicators) {
   return {
     signal,
     signalReason,
-    timeframe: '1 สัปดาห์ (รอบเทรด จันทร์ ➔ ศุกร์ บนเป๋าตัง)',
+    timeframe: 'เรียลไทม์ทุกวัน (แจ้งเตือนเตรียมซื้อทันที ไม่ต้องรอวันจันทร์)',
     targetHoldDays,
     riskRewardRatio,
     winRateEstimate: isConfluence98Reached ? '88%+' : '74%',
@@ -612,7 +663,7 @@ app.post('/api/gemini/analyze', async (req, res) => {
           macroSummary: `ราคาทองคำสปอต ($${currentSpotVal.toFixed(2)}) กำลังแกว่งตัวในกรอบเก็งกำไร โดยมีแรงหนุนจากความต้องการสินทรัพย์ปลอดภัยและค่าเงินบาท (฿${currentThbVal.toFixed(2)}/USD)`,
           weeklyOutlook: `ในกรอบ 1 สัปดาห์ คาดว่าทองคำมีโอกาสดีดขึ้นทดสอบแนวต้าน $${(currentSpotVal * 1.025).toFixed(2)} - $${tp5Val} หากสามารถยืนเหนือแนวรับ $${supportVal} ได้อย่างมั่นคง`,
           paotangStrategy:
-            'สำหรับการเทรดผ่านเป๋าตัง Gold Wallet: แนะนำเข้าซื้อวันจันทร์เมื่อคะแนนปัจจัย ≥ 98% แล้วตั้งราคาขายล่วงหน้า 7 วันบนแอปเป๋าตังที่เป้าหมาย TP +5.00% ปิดขายทำกำไรก่อนตลาดปิดวันศุกร์',
+            'สำหรับการเทรดผ่านเป๋าตัง Gold Wallet: เมื่อมาตรวัดคะแนนปัจจัยรอบด้านเกินมาตรฐาน (≥ 98%) สามารถเตรียมเข้าซื้อได้ทันทีทุกวันโดยไม่ต้องรอวันจันทร์ จากนั้นตั้งราคาขายล่วงหน้า 7 วันบนแอปเป๋าตังที่เป้าหมาย TP +5.00%',
           keyLevels: {
             support: `แนวรับสำคัญ: $${supportVal} / บาทละ ฿${thaiSupport.toLocaleString()}`,
             resistance: `แนวต้านเป้าหมาย +5%: $${tp5Val} / บาทละ ฿${thaiTp5.toLocaleString()}`,
@@ -633,7 +684,7 @@ app.post('/api/gemini/analyze', async (req, res) => {
 - MACD Histogram: ${macdHist || 0.5}
 - สัญญาณอัลกอริทึม: ${signal || 'BUY'}
 
-เป้าหมายของนักลงทุน: "เทรดวันจันทร์ ขายทำกำไรวันศุกร์ เป้าหมาย TP +5% ต่อสัปดาห์ (ไม่ถือข้ามสัปดาห์)"
+เป้าหมายของนักลงทุน: "เข้าซื้อทันทีเมื่อคะแนนปัจจัยรอบด้านเกินมาตรฐานโดยไม่ต้องรอถึงวันจันทร์ และตั้งขายล่วงหน้า 7 วัน เป้าหมาย TP +5%"
 
 โปรดวิเคราะห์อย่างละเอียด เจาะจง และใช้ภาษาไทยที่กระชับ ชัดเจน สำหรับนักเทรดเป๋าตัง โดยตอบเป็น JSON ตามโครงสร้างนี้:
 {
@@ -673,8 +724,8 @@ app.post('/api/gemini/analyze', async (req, res) => {
       aiAnalysis: {
         sentiment: isBull ? 'BULLISH' : 'SIDEWAY_UP',
         macroSummary: `ราคาทองคำสปอต ($${currentSpotVal}) กำลังแกว่งตัวในแนวโน้มขาขึ้น โดยมีปัจจัยหนุนจากความคาดหวังการปรับลดอัตราดอกเบี้ยและแรงซื้อสินทรัพย์ปลอดภัย ขณะที่ค่าเงินบาท (฿${currentThbVal}) ช่วยพยุงฐานราคาทองในประเทศ`,
-        weeklyOutlook: `ในรอบสัปดาห์นี้ (จันทร์ ➔ ศุกร์) คาดว่าราคามีโอกาสทดสอบแนวต้าน $${(currentSpotVal * 1.025).toFixed(1)} - $${(currentSpotVal * 1.05).toFixed(1)} หากยืนเหนือแนวรับ $${(currentSpotVal - 12).toFixed(1)} ได้ต่อเนื่อง สัญญาณเทคนิคปัจจุบันอยู่ในโซน ${signal || 'BUY'}`,
-        paotangStrategy: `กลยุทธ์พอร์ตเป๋าตัง: แนะนำร้าน MTS Gold หรือ YLG สำหรับสายเทรดพอร์ต USD สเปรดแคบเพียง 0.40$ ทำให้คืนทุนไวกว่า เข้าซื้อวันจันทร์เมื่อคะแนน ≥ 98% แล้วตั้งขายล่วงหน้า 7 วัน +5.00% ปิดทำกำไรทั้งหมดภายในวันศุกร์`,
+        weeklyOutlook: `ในกรอบ 7 วันข้างหน้า คาดว่าราคามีโอกาสทดสอบแนวต้าน $${(currentSpotVal * 1.025).toFixed(1)} - $${(currentSpotVal * 1.05).toFixed(1)} หากยืนเหนือแนวรับ $${(currentSpotVal - 12).toFixed(1)} ได้ต่อเนื่อง สัญญาณเทคนิคปัจจุบันอยู่ในโซน ${signal || 'BUY'}`,
+        paotangStrategy: `กลยุทธ์พอร์ตเป๋าตัง: แนะนำร้าน MTS Gold หรือ YLG สำหรับสายเทรดพอร์ต USD สเปรดแคบเพียง 0.40$ เข้าเตรียมซื้อทันทีเมื่อคะแนนปัจจัยเกินมาตรฐาน (ไม่ต้องรอวันจันทร์) แล้วตั้งขายล่วงหน้า 7 วัน +5.00%`,
         keyLevels: {
           support: `แนวรับสำคัญ: $${(currentSpotVal - 12).toFixed(1)} (บาทละ ฿${Math.round((currentSpotVal - 12) * 16.3).toLocaleString()})`,
           resistance: `แนวต้านทำกำไร +5%: $${(currentSpotVal * 1.05).toFixed(1)} (บาทละ ฿${Math.round(currentSpotVal * 1.05 * 16.3).toLocaleString()})`,
@@ -906,36 +957,10 @@ app.all('/api/cron/check-signal', async (req, res) => {
       spot = Number(Number(req.query.spot).toFixed(2));
       resolvedSource = 'QUERY_OVERRIDE';
     } else if (!useCalibrated) {
-      // Fetch fresh global spot gold & USD/THB on cron invocation
-      try {
-        const [xauRes, fxRes] = await Promise.allSettled([
-          fetch('https://api.gold-api.com/price/XAU', {
-            signal: AbortSignal.timeout(4500),
-          }),
-          fetch('https://open.er-api.com/v6/latest/USD', {
-            signal: AbortSignal.timeout(4500),
-          }),
-        ]);
-
-        if (xauRes.status === 'fulfilled' && xauRes.value.ok) {
-          const xauJson = await xauRes.value.json();
-          if (xauJson?.price && Number(xauJson.price) > 1000) {
-            spot = Number(Number(xauJson.price).toFixed(2));
-            baseSpotGold = spot;
-            resolvedSource = 'LIVE_XAU_API';
-          }
-        }
-
-        if (fxRes.status === 'fulfilled' && fxRes.value.ok) {
-          const fxJson = await fxRes.value.json();
-          if (fxJson?.rates?.THB && Number(fxJson.rates.THB) > 20) {
-            usdThb = Number(Number(fxJson.rates.THB).toFixed(2));
-            baseUsdThb = usdThb;
-          }
-        }
-      } catch {
-        // Fallback smoothly to baseline
-      }
+      const refreshed = await fetchLiveMarketData(true);
+      spot = baseSpotGold;
+      usdThb = baseUsdThb;
+      resolvedSource = refreshed ? 'LIVE_MARKET' : priceDataSource;
     }
 
     const candles = generateHistoricalCandles(60, spot);
@@ -975,26 +1000,26 @@ app.all('/api/cron/check-signal', async (req, res) => {
     } else {
       const weekly = plan.weeklyStrategy;
       const headerTag = forceSend
-        ? `🤖 [Cron-Job รายงานสัญญาณทองคำเป๋าตัง - มั่นใจ ${score}%]`
-        : `🚨 [Cron-Job ตรวจพบจังหวะเข้าซื้อ! - คะแนนปัจจัย ${score}%]`;
+        ? `🤖 [Cron-Job รายงานเตรียมซื้อทองคำเป๋าตัง - คะแนน ${score}%]`
+        : `🚨 [เตรียมเข้าซื้อทองคำทันที! - คะแนนปัจจัยเกินมาตรฐาน ${score}%]`;
 
       const message = `
 ${headerTag}
 ------------------------------------
-🎯 สัญญาณระบบ: ${plan.signal} (Confluence ${score}%)
-🗓️ กลยุทธ์สัปดาห์: ${weekly.entryDay} ➔ ${weekly.exitDay}
+🎯 สัญญาณระบบ: ${plan.signal} (Confluence ${score}% / เกณฑ์ ≥ ${minScore}%)
+⚡ แผนเข้าซื้อ: เตรียมเข้าซื้อทันที (ไม่ต้องรอถึงวันจันทร์)
 💰 ราคาทองสปอตโลก: $${spot.toFixed(2)} USD/oz
 🪙 ราคาทอง 96.5% (สมาคม): ฿${thaiGold.associationSell.toLocaleString()} บาท
 💱 ค่าเงินบาท: ฿${usdThb.toFixed(2)} / USD
 
-🎯 จุดยุทธศาสตร์รอบสัปดาห์นี้:
-• ช่วงเข้าซื้อ (Entry): $${plan.spotLevels.entryRange}
+🎯 จุดยุทธศาสตร์เข้าซื้อ & ทำกำไร:
+• ช่วงเตรียมเข้าซื้อ (Entry): $${plan.spotLevels.entryRange}
 • เป้าหมาย TP +5.00%: $${weekly.targetSpotPrice} USD (฿${weekly.targetThaiPrice.toLocaleString()} บาท)
 • จุดตัดขาดทุน (SL): $${plan.spotLevels.stopLoss}
 
 💡 แอ็กชันบนเป๋าตัง:
 • พอร์ต USD (MTS / YLG) สเปรดแคบ 0.40$
-• เมื่อซื้อแล้ว กด "ขายทอง" > "ตั้งราคา" +5.00% ($${weekly.targetSpotPrice} USD) อายุ 7 วัน ปิดทำกำไรก่อนวันศุกร์
+• เตรียมเข้าซื้อตามโซน Entry แล้วกด "ขายทอง" > "ตั้งราคา" ล่วงหน้า +5.00% ($${weekly.targetSpotPrice} USD) อายุ 7 วัน
       `.trim();
 
       const { response, tgData } = await sendTelegramDirect(activeBotToken, activeChatId, message);
@@ -1004,7 +1029,7 @@ ${headerTag}
         chatTitle = tgData.result?.chat?.title || tgData.result?.chat?.username || activeChatId;
         reason = forceSend
           ? `ทดสอบส่งรายงานเข้ากลุ่ม Telegram "${chatTitle}" สำเร็จ`
-          : `คะแนนปัจจัยถึง ${score}% (≥ ${minScore}%) ส่งแจ้งเตือนเข้ากลุ่ม Telegram "${chatTitle}" แล้ว`;
+          : `คะแนนปัจจัยเกินมาตรฐาน (${score}% ≥ ${minScore}%) ส่งแจ้งเตือนเตรียมเข้าซื้อเข้ากลุ่ม Telegram "${chatTitle}" ทันที (ไม่ต้องรอวันจันทร์)`;
       } else {
         return res.status(response.status || 502).json({
           success: false,

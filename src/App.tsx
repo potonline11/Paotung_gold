@@ -3,8 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { MarketOverviewData, PriceAlert, AiMarketAnalysis, AutoTradeAlertSettings } from './types/gold';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import {
+  MarketOverviewData,
+  PriceAlert,
+  AiMarketAnalysis,
+  AutoTradeAlertSettings,
+  GoldPurityType,
+  ApiConnectionStatus,
+} from './types/gold';
 import { Header } from './components/Header';
 import { PriceOverview } from './components/PriceOverview';
 import { CandlestickChart } from './components/CandlestickChart';
@@ -15,14 +22,70 @@ import { ProfitCalculator } from './components/ProfitCalculator';
 import { PaotangOrderPlanner } from './components/PaotangOrderPlanner';
 import { TelegramAlertsManager } from './components/TelegramAlertsManager';
 import { AiAnalysisModal } from './components/AiAnalysisModal';
-import { Bell, ShieldCheck, Zap, BookOpen, AlertCircle } from 'lucide-react';
+import { Bell, BookOpen, AlertCircle } from 'lucide-react';
+
+const PAOTANG_OFFSET_KEY = 'paotang_spread_offset_thb';
+const PAOTANG_PURITY_KEY = 'paotang_gold_purity';
 
 export default function App() {
   const [marketData, setMarketData] = useState<MarketOverviewData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [apiStatus, setApiStatus] = useState<ApiConnectionStatus>('SYNCING');
+  const [xauApiOk, setXauApiOk] = useState<boolean>(true);
+  const [fxApiOk, setFxApiOk] = useState<boolean>(true);
+  const [lastUpdated, setLastUpdated] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [selectedPartner, setSelectedPartner] = useState<'mts' | 'ylg' | 'aurora'>('mts');
+
+  // Persistent Gold Purity Toggle: '9999' (Paotang Gold Wallet) | '965' (Thai Gold 96.5%)
+  const [goldPurity, setGoldPurity] = useState<GoldPurityType>(() => {
+    const saved = localStorage.getItem(PAOTANG_PURITY_KEY);
+    return saved === '965' || saved === '9999' ? saved : '9999';
+  });
+
+  // Persistent Spread Offset in THB (saved permanently in localStorage)
+  const [spreadOffsetThb, setSpreadOffsetThb] = useState<number>(() => {
+    const saved = localStorage.getItem(PAOTANG_OFFSET_KEY);
+    if (saved !== null) {
+      const parsed = Number(saved);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return 0;
+  });
+
+  const handleChangeGoldPurity = useCallback((purity: GoldPurityType) => {
+    setGoldPurity(purity);
+    localStorage.setItem(PAOTANG_PURITY_KEY, purity);
+  }, []);
+
+  const handleChangeSpreadOffset = useCallback((offset: number) => {
+    const safeOffset = Number.isFinite(offset) ? Math.round(offset) : 0;
+    setSpreadOffsetThb(safeOffset);
+    localStorage.setItem(PAOTANG_OFFSET_KEY, String(safeOffset));
+  }, []);
+
+  // Store last known valid numeric prices and latest UI flags in refs for stable 15s polling
+  const lastValidRatesRef = useRef<{ xauUsd: number; usdThb: number }>({
+    xauUsd: 3770.6,
+    usdThb: 33.85,
+  });
+  const hasMarketDataRef = useRef<boolean>(false);
+  const goldPurityRef = useRef<GoldPurityType>(goldPurity);
+  const spreadOffsetRef = useRef<number>(spreadOffsetThb);
+
+  useEffect(() => {
+    goldPurityRef.current = goldPurity;
+  }, [goldPurity]);
+
+  useEffect(() => {
+    spreadOffsetRef.current = spreadOffsetThb;
+  }, [spreadOffsetThb]);
+
+  useEffect(() => {
+    hasMarketDataRef.current = Boolean(marketData);
+  }, [marketData]);
 
   // Alerts state
   const [alerts, setAlerts] = useState<PriceAlert[]>(() => {
@@ -46,26 +109,30 @@ export default function App() {
         return {
           enabled: parsed.enabled ?? true,
           enableTelegramAlerts: parsed.enableTelegramAlerts ?? true,
-          strict98PercentOnly: parsed.strict98PercentOnly ?? true, // Default STRICT 98%+ to prevent spam
-          weeklyScheduleOnly: parsed.weeklyScheduleOnly ?? true,
+          strict98PercentOnly: parsed.strict98PercentOnly ?? true,
+          confluenceThreshold: parsed.confluenceThreshold ?? 98,
+          instantAnyDayAlert: parsed.instantAnyDayAlert ?? true,
+          weeklyScheduleOnly: false,
           notifyOnBuySignal: parsed.notifyOnBuySignal ?? true,
           notifyOnTakeProfit: parsed.notifyOnTakeProfit ?? true,
-          notifyOnRsiOversold: parsed.notifyOnRsiOversold ?? false, // Turn off noisy RSI alerts by default
-          notifyOnGoldenHours: parsed.notifyOnGoldenHours ?? false, // Turn off noisy hours alerts by default
-          cooldownMinutes: parsed.cooldownMinutes ?? 360, // 6 hours default cooldown to prevent repeated alerts
+          notifyOnRsiOversold: parsed.notifyOnRsiOversold ?? false,
+          notifyOnGoldenHours: parsed.notifyOnGoldenHours ?? false,
+          cooldownMinutes: parsed.cooldownMinutes ?? 360,
         };
       } catch (e) {}
     }
     return {
       enabled: true,
       enableTelegramAlerts: true,
-      strict98PercentOnly: true, // Only alert when confluence >= 98%
-      weeklyScheduleOnly: true, // Monday Entry -> Friday Exit plan
+      strict98PercentOnly: true,
+      confluenceThreshold: 98,
+      instantAnyDayAlert: true,
+      weeklyScheduleOnly: false,
       notifyOnBuySignal: true,
       notifyOnTakeProfit: true,
       notifyOnRsiOversold: false,
       notifyOnGoldenHours: false,
-      cooldownMinutes: 360, // 6 hours
+      cooldownMinutes: 360,
     };
   });
 
@@ -193,13 +260,18 @@ export default function App() {
       const plan = data.speculationPlan;
       const rsi = data.indicators.rsi;
       const score = plan.confidenceScore || 0;
-      const is98Confluence = score >= 98 || plan.factorBreakdown?.isConfluence98Reached;
+      const threshold = autoSettings.confluenceThreshold ?? 98;
+      const isConfluencePassed =
+        score >= threshold || (threshold <= 98 && Boolean(plan.factorBreakdown?.isConfluence98Reached));
 
-      // 1. High-Confluence Buy / Entry Opportunity (Strict 98%+ Filter)
+      // 1. Real-time Prepare-to-Buy Alert whenever Multi-Factor Confluence exceeds threshold (any day, no Monday wait)
       if (autoSettings.notifyOnBuySignal) {
         const isQualified = autoSettings.strict98PercentOnly
-          ? is98Confluence
-          : (plan.signal === 'SUPER STRONG BUY (98%+)' || plan.signal === 'STRONG BUY' || plan.signal === 'BUY');
+          ? isConfluencePassed
+          : isConfluencePassed ||
+            plan.signal === 'SUPER STRONG BUY (98%+)' ||
+            plan.signal === 'STRONG BUY' ||
+            plan.signal === 'BUY';
 
         if (isQualified) {
           const lastBuyTime = parseInt(
@@ -209,29 +281,31 @@ export default function App() {
             localStorage.setItem('paotang_last_auto_notify_buy', now.toString());
 
             const weekly = plan.weeklyStrategy;
+            const purityLabel = goldPurityRef.current === '9999' ? '99.99%' : '96.5%';
             const msg = `
-🚨 [ได้เวลาเข้าซื้อเก็งกำไร! - คะแนนปัจจัยมั่นใจ ${score}%]
+🚨 [เตรียมเข้าซื้อทองคำทันที! - คะแนนปัจจัยเกินมาตรฐาน ${score}%]
 ------------------------------------
-🎯 ระบบประเมิน: จังหวะเข้าซื้อความแม่นยำสูง (Confluence ${score}%)
-🗓️ กลยุทธ์สัปดาห์: ${weekly.entryDay} ➔ ${weekly.exitDay}
+🎯 มาตรวัดปัจจัยรอบด้าน: ${score}% (เกินมาตรฐาน ≥ ${threshold}%)
+⚡ แผนเข้าซื้อ: แจ้งเตือนเตรียมซื้อทันที (ไม่ต้องรอถึงวันจันทร์)
 💰 ราคาทองสปอตโลก: $${spot.toFixed(2)} USD/oz
-🪙 ราคาทอง 96.5% (สมาคม): ฿${thaiGold.toLocaleString()} บาท
+🪙 ราคาทอง ${purityLabel} (เป๋าตัง): ฿${thaiGold.toLocaleString()} บาท
 
-🎯 จุดยุทธศาสตร์รอบสัปดาห์นี้:
-• ช่วงราคาเข้าซื้อ (Entry): $${plan.spotLevels.entryRange}
+🎯 จุดยุทธศาสตร์เตรียมเข้าซื้อ & ทำกำไร:
+• ช่วงราคาเตรียมซื้อ (Entry): $${plan.spotLevels.entryRange}
 • เป้าหมาย TP +5.00%: $${weekly.targetSpotPrice} USD (฿${weekly.targetThaiPrice.toLocaleString()} บาท)
 • กำไรคาดการณ์: +$${weekly.gainUsdPerOz} USD/oz (+฿${weekly.gainThaiPerBaht.toLocaleString()} บาท/บาททอง)
 • จุดตัดขาดทุน (SL): $${plan.spotLevels.stopLoss}
 
 💡 คำแนะนำแอ็กชันบนแอปเป๋าตัง:
-1. เข้าเมนู "ซื้อทอง" พอร์ต USD (MTS / YLG) สเปรดแคบ 0.40$
-2. ซื้อไม้แรก ณ ราคาตลาดปัจจุบัน
-3. เมื่อซื้อเสร็จ ให้กด "ขายทอง" > "ตั้งราคา" ล่วงหน้า +5.00% ($${weekly.targetSpotPrice} USD) กำหนดอายุ 7 วัน ระบบจะขายล็อกกำไรอัตโนมัติ
-4. ปิดสถานะขายทำกำไรทั้งหมดภายในวันศุกร์ ไม่ถือข้ามสัปดาห์
+1. เข้าเมนู "ซื้อทอง" พอร์ต USD (MTS / YLG) สเปรดแคบ 0.40$ หรือพอร์ต 99.99%
+2. เตรียมเข้าซื้อไม้แรกตามโซน Entry ได้ทันทีวันนี้ ไม่ต้องรอวันจันทร์
+3. เมื่อซื้อเสร็จ กด "ขายทอง" > "ตั้งราคา" ล่วงหน้า +5.00% ($${weekly.targetSpotPrice} USD) อายุ 7 วัน ระบบจะขายล็อกกำไรอัตโนมัติ
             `.trim();
 
             broadcastSignalNotification(msg);
-            setTriggeredToast(`🚨 ตรวจพบจังหวะเข้าซื้อความมั่นใจ ${score}%! ส่งแจ้งเตือนเข้า ${channelLabel} แล้ว`);
+            setTriggeredToast(
+              `🚨 คะแนนปัจจัย ${score}% เกินมาตรฐาน (${threshold}%)! เตรียมเข้าซื้อ — ส่งแจ้งเตือนเข้า ${channelLabel} แล้ว`
+            );
             playAlertChime();
             return;
           }
@@ -288,27 +362,138 @@ export default function App() {
     ]
   );
 
-  // Fetch market data
+  // Fetch market data every 15s: backend overview + direct live XAU/USD & Frankfurter USD/THB with fallback
   const fetchMarketData = useCallback(async () => {
+    setIsRefreshing(true);
     try {
-      const res = await fetch('/api/market/overview');
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+      const fetchDirectXau = async (): Promise<number | null> => {
+        try {
+          const r = await fetch('https://api.gold-api.com/price/XAU', {
+            signal: AbortSignal.timeout(5000),
+          });
+          if (!r.ok) return null;
+          const j = await r.json();
+          const val = Number(j?.price);
+          return Number.isFinite(val) && val > 1000 ? Number(val.toFixed(2)) : null;
+        } catch {
+          return null;
+        }
+      };
+
+      const fetchDirectFrankfurterThb = async (): Promise<number | null> => {
+        // Primary: Frankfurter v2 real-time rates (CORS-enabled)
+        try {
+          const r = await fetch('https://api.frankfurter.dev/v2/rates?base=USD&quotes=THB', {
+            signal: AbortSignal.timeout(5000),
+          });
+          if (r.ok) {
+            const j = await r.json();
+            const raw = Array.isArray(j) ? j[0]?.rate : j?.rates?.THB;
+            const val = Number(raw);
+            if (Number.isFinite(val) && val > 20) return Number(val.toFixed(3));
+          }
+        } catch {
+          // try Frankfurter v1
+        }
+        try {
+          const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=THB', {
+            signal: AbortSignal.timeout(5000),
+          });
+          if (r.ok) {
+            const j = await r.json();
+            const val = Number(j?.rates?.THB);
+            if (Number.isFinite(val) && val > 20) return Number(val.toFixed(3));
+          }
+        } catch {
+          // fallback handled below
+        }
+        return null;
+      };
+
+      const [overviewRes, liveXau, liveThb] = await Promise.all([
+        fetch('/api/market/overview', { signal: AbortSignal.timeout(8000) }),
+        fetchDirectXau(),
+        fetchDirectFrankfurterThb(),
+      ]);
+
+      if (!overviewRes.ok) {
+        throw new Error(`HTTP ${overviewRes.status}`);
       }
-      const data: MarketOverviewData = await res.json();
-      if (data.success) {
-        setMarketData(data);
-        setLoadError(null);
-        checkAlertTriggers(data.rates.xauUsd, data.thaiGold.associationSell);
-        checkAutoTradeTriggers(data);
-      } else {
+      const data: MarketOverviewData = await overviewRes.json();
+      if (!data.success) {
         throw new Error('ไม่สามารถโหลดข้อมูลตลาดได้');
       }
+
+      const isCustomMode = data.dataSource === 'CUSTOM';
+      const backendXau = Number(data.rates?.xauUsd);
+      const backendThb = Number(data.rates?.usdThb);
+
+      // Prefer live direct APIs unless user locked custom calibration; fall back safely without NaN
+      const resolvedXau = isCustomMode
+        ? Number.isFinite(backendXau) && backendXau > 1000
+          ? backendXau
+          : lastValidRatesRef.current.xauUsd
+        : liveXau ??
+          (Number.isFinite(backendXau) && backendXau > 1000
+            ? backendXau
+            : lastValidRatesRef.current.xauUsd);
+
+      const resolvedThb = isCustomMode
+        ? Number.isFinite(backendThb) && backendThb > 20
+          ? backendThb
+          : lastValidRatesRef.current.usdThb
+        : liveThb ??
+          (Number.isFinite(backendThb) && backendThb > 20
+            ? backendThb
+            : lastValidRatesRef.current.usdThb);
+
+      lastValidRatesRef.current = { xauUsd: resolvedXau, usdThb: resolvedThb };
+
+      const xauHealthy = isCustomMode || liveXau !== null || (Number.isFinite(backendXau) && backendXau > 1000);
+      const fxHealthy = isCustomMode || liveThb !== null || (Number.isFinite(backendThb) && backendThb > 20);
+      setXauApiOk(xauHealthy);
+      setFxApiOk(fxHealthy);
+      setApiStatus(xauHealthy && fxHealthy ? 'LIVE' : 'FALLBACK');
+      setLastUpdated(new Date().toISOString());
+
+      const mergedData: MarketOverviewData = {
+        ...data,
+        rates: {
+          ...data.rates,
+          xauUsd: resolvedXau,
+          usdThb: resolvedThb,
+        },
+      };
+
+      setMarketData(mergedData);
+      setLoadError(null);
+
+      // Compute effective calibrated Thai gold price for alerts trigger checking
+      const ozToGram = 31.1035;
+      const bahtToGram = 15.244;
+      const raw9999 = resolvedXau * resolvedThb * (bahtToGram / ozToGram);
+      const baseThai = goldPurityRef.current === '9999' ? raw9999 : raw9999 * 0.965;
+      const calibratedThai = Math.max(0, Math.round(baseThai + spreadOffsetRef.current));
+
+      checkAlertTriggers(resolvedXau, calibratedThai);
+      checkAutoTradeTriggers({
+        ...mergedData,
+        thaiGold: {
+          ...mergedData.thaiGold,
+          associationSell: calibratedThai,
+        },
+      });
     } catch (err: any) {
       console.error('Failed to fetch market data:', err);
-      setLoadError(err?.message || 'เชื่อมต่อ API ตลาดทองคำไม่สำเร็จ');
+      setXauApiOk(false);
+      setFxApiOk(false);
+      setApiStatus(hasMarketDataRef.current ? 'FALLBACK' : 'ERROR');
+      if (!hasMarketDataRef.current) {
+        setLoadError(err?.message || 'เชื่อมต่อ API ตลาดทองคำไม่สำเร็จ');
+      }
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   }, [checkAlertTriggers, checkAutoTradeTriggers]);
 
@@ -328,10 +513,10 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Initial load and periodic polling every 4 seconds
+  // Initial load and periodic polling every 15 seconds (XAU/USD + Frankfurter USD/THB)
   useEffect(() => {
     fetchMarketData();
-    const interval = setInterval(fetchMarketData, 4000);
+    const interval = setInterval(fetchMarketData, 15000);
     return () => clearInterval(interval);
   }, [fetchMarketData]);
 
@@ -479,7 +664,116 @@ export default function App() {
     }
   };
 
-  if (isLoading || !marketData) {
+  // Dynamically recalculate Thai Gold Price (99.99% vs 96.5%), Spread Offset, Entry, TP, and SL
+  const effectiveData = useMemo<MarketOverviewData | null>(() => {
+    if (!marketData) return null;
+
+    const spot = Number.isFinite(marketData.rates.xauUsd) ? marketData.rates.xauUsd : 3770.6;
+    const fx = Number.isFinite(marketData.rates.usdThb) ? marketData.rates.usdThb : 33.85;
+    const ozToGram = 31.1035;
+    const bahtToGram = 15.244;
+
+    // Exact user-requested formulas per 1 baht-weight
+    const rawGold9999 = spot * fx * (bahtToGram / ozToGram);
+    const rawGold965 = spot * fx * (bahtToGram / ozToGram) * 0.965;
+    const selectedRawPrice = goldPurity === '9999' ? rawGold9999 : rawGold965;
+
+    // Apply persistent Spread Offset (THB) stored in localStorage
+    const calibratedSell = Math.max(0, Math.round(selectedRawPrice + spreadOffsetThb));
+    const spreadGap = goldPurity === '9999' ? 60 : 100;
+    const calibratedBuy = Math.max(0, calibratedSell - spreadGap);
+
+    // Recalculate dynamic Entry, TP1, TP2, TP5 (+5%), and Stop Loss from Offset-adjusted price
+    const entryThaiMin = Math.round(calibratedSell * 0.995);
+    const entryThaiMax = calibratedSell;
+    const tp1Thai = Math.round(calibratedSell * 1.01);
+    const tp2Thai = Math.round(calibratedSell * 1.025);
+    const tp5Thai = Math.round(calibratedSell * 1.05);
+    const stopLossThai = Math.round(calibratedSell * 0.991);
+    const gainThaiPerBaht = tp5Thai - calibratedSell;
+
+    // Also reflect spread offset in partner quotes for consistent Profit Calculator & Partner Cards
+    const sell965WithOffset = Math.max(0, Math.round(rawGold965 + spreadOffsetThb));
+
+    return {
+      ...marketData,
+      thaiGold: {
+        ...marketData.thaiGold,
+        rawPrice: Math.round(selectedRawPrice),
+        gold9999Price: Math.round(rawGold9999),
+        gold965Price: Math.round(rawGold965),
+        spreadOffsetThb,
+        purity: goldPurity,
+        associationSell: calibratedSell,
+        associationBuy: calibratedBuy,
+        ornamentSell: calibratedSell + 500,
+        ornamentBuy: calibratedBuy - 700,
+      },
+      partners: {
+        ...marketData.partners,
+        mts: {
+          ...marketData.partners.mts,
+          thb965: {
+            buy: Math.max(0, sell965WithOffset - 60),
+            sell: sell965WithOffset,
+            spread: 60,
+          },
+          usd9999: {
+            buy: Number((spot - 0.2).toFixed(2)),
+            sell: Number((spot + 0.2).toFixed(2)),
+            spread: 0.4,
+          },
+        },
+        ylg: {
+          ...marketData.partners.ylg,
+          thb965: {
+            buy: Math.max(0, sell965WithOffset - 65),
+            sell: sell965WithOffset,
+            spread: 65,
+          },
+          usd9999: {
+            buy: Number((spot - 0.25).toFixed(2)),
+            sell: Number((spot + 0.25).toFixed(2)),
+            spread: 0.5,
+          },
+        },
+        aurora: {
+          ...marketData.partners.aurora,
+          thb965: {
+            buy: Math.max(0, sell965WithOffset - 70),
+            sell: sell965WithOffset,
+            spread: 70,
+          },
+          thb9999PerGram: {
+            buy: Math.max(0, Math.round((rawGold9999 + spreadOffsetThb) / bahtToGram) - 10),
+            sell: Math.max(0, Math.round((rawGold9999 + spreadOffsetThb) / bahtToGram) + 10),
+            spread: 20,
+          },
+        },
+      },
+      speculationPlan: {
+        ...marketData.speculationPlan,
+        weeklyStrategy: {
+          ...marketData.speculationPlan.weeklyStrategy,
+          entrySpotPrice: spot,
+          entryThaiPrice: calibratedSell,
+          targetThaiPrice: tp5Thai,
+          gainThaiPerBaht,
+        },
+        thaiBahtLevels: {
+          current: calibratedSell,
+          entryRange: `${entryThaiMin.toLocaleString()} - ${entryThaiMax.toLocaleString()} บาท`,
+          tp1: tp1Thai,
+          tp2: tp2Thai,
+          tp5PercentWeekly: tp5Thai,
+          stopLoss: stopLossThai,
+          expectedGainPerBaht: `+${gainThaiPerBaht.toLocaleString()} บาท (TP +5%) / บาททอง`,
+        },
+      },
+    };
+  }, [marketData, goldPurity, spreadOffsetThb]);
+
+  if (isLoading || !effectiveData) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-300 space-y-4 px-4">
         {loadError ? (
@@ -507,7 +801,7 @@ export default function App() {
             <div className="text-center">
               <p className="font-bold text-lg text-white">กำลังเชื่อมต่อข้อมูลตลาดทองคำเป๋าตัง...</p>
               <p className="text-xs text-slate-500 mt-1">
-                ดึงราคา XAU/USD, USD/THB, สมาคมค้าทองคำ และคำนวณสเปรด MTS, YLG, Aurora
+                ดึงราคา XAU/USD, Frankfurter USD/THB และคำนวณสเปรด MTS, YLG, Aurora
               </p>
             </div>
           </>
@@ -541,26 +835,37 @@ export default function App() {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-8">
-        {/* Section 1: Price Overview (XAU/USD, USD/THB, GTA) */}
+        {/* Section 1: Price Overview (XAU/USD, USD/THB, 99.99%/96.5% + Spread Offset) */}
         <section id="overview" className="space-y-4">
           <PriceOverview
-            xauUsd={marketData.rates.xauUsd}
-            usdThb={marketData.rates.usdThb}
-            change24hUsd={marketData.rates.change24hUsd}
-            change24hPercent={marketData.rates.change24hPercent}
-            thaiGold={marketData.thaiGold}
-            dataSource={marketData.dataSource}
+            xauUsd={effectiveData.rates.xauUsd}
+            usdThb={effectiveData.rates.usdThb}
+            change24hUsd={effectiveData.rates.change24hUsd}
+            change24hPercent={effectiveData.rates.change24hPercent}
+            thaiGold={effectiveData.thaiGold}
+            dataSource={effectiveData.dataSource}
+            goldPurity={goldPurity}
+            onChangeGoldPurity={handleChangeGoldPurity}
+            spreadOffsetThb={spreadOffsetThb}
+            onChangeSpreadOffsetThb={handleChangeSpreadOffset}
+            apiStatus={apiStatus}
+            xauApiOk={xauApiOk}
+            fxApiOk={fxApiOk}
+            lastUpdated={lastUpdated}
+            isRefreshing={isRefreshing}
+            onRefreshNow={fetchMarketData}
             onSimulateTick={handleSimulateTick}
             onSyncPrice={handleSyncPrice}
           />
         </section>
 
-        {/* Section 2: Core 1-Week Speculation Signal Engine */}
+        {/* Section 2: Core Multi-Factor Speculation Signal Engine */}
         <section id="signal">
           <SpeculationSignalCard
-            plan={marketData.speculationPlan}
-            currentSpot={marketData.rates.xauUsd}
-            currentThaiGold={marketData.thaiGold.associationSell}
+            plan={effectiveData.speculationPlan}
+            currentSpot={effectiveData.rates.xauUsd}
+            currentThaiGold={effectiveData.thaiGold.associationSell}
+            confluenceThreshold={autoSettings.confluenceThreshold ?? 98}
             onSetQuickAlert={handleQuickAlert}
             onOpenAiAnalysis={handleTriggerAiAnalysis}
           />
@@ -569,8 +874,8 @@ export default function App() {
         {/* Section 3: Paotang Limit Order Planner & Helper (ตั้งราคาล่วงหน้า 7 วัน) */}
         <section id="planner">
           <PaotangOrderPlanner
-            currentSpot={marketData.rates.xauUsd}
-            speculationPlan={marketData.speculationPlan}
+            currentSpot={effectiveData.rates.xauUsd}
+            speculationPlan={effectiveData.speculationPlan}
             onSetAlert={(price, type, label) => {
               handleAddAlert({
                 asset: 'XAU_USD',
@@ -586,23 +891,23 @@ export default function App() {
         {/* Section 3: Candlestick Chart & Technical Indicators Grid */}
         <section className="space-y-6">
           <CandlestickChart
-            candles={marketData.candles}
-            indicators={marketData.indicators}
-            currentSpot={marketData.rates.xauUsd}
+            candles={effectiveData.candles}
+            indicators={effectiveData.indicators}
+            currentSpot={effectiveData.rates.xauUsd}
             onRefresh={fetchMarketData}
             isLoading={isLoading}
           />
 
           <TechnicalIndicators
-            indicators={marketData.indicators}
-            currentSpot={marketData.rates.xauUsd}
+            indicators={effectiveData.indicators}
+            currentSpot={effectiveData.rates.xauUsd}
           />
         </section>
 
         {/* Section 4: 3 Partner Gold Shops on Paotang (MTS, YLG, Aurora) */}
         <section>
           <PartnerCards
-            partners={marketData.partners}
+            partners={effectiveData.partners}
             selectedPartner={selectedPartner}
             onSelectPartner={setSelectedPartner}
           />
@@ -611,20 +916,20 @@ export default function App() {
         {/* Section 5: Profit Calculator for Paotang */}
         <section id="calculator">
           <ProfitCalculator
-            partners={marketData.partners}
-            currentSpot={marketData.rates.xauUsd}
-            currentThaiGold={marketData.thaiGold.associationSell}
-            defaultEntrySpot={marketData.rates.xauUsd}
-            defaultTpSpot={marketData.speculationPlan.spotLevels.tp1}
+            partners={effectiveData.partners}
+            currentSpot={effectiveData.rates.xauUsd}
+            currentThaiGold={effectiveData.thaiGold.associationSell}
+            defaultEntrySpot={effectiveData.rates.xauUsd}
+            defaultTpSpot={effectiveData.speculationPlan.spotLevels.tp1}
           />
         </section>
 
         {/* Section 6: Automated Telegram Alerts Manager */}
         <section id="alerts">
           <TelegramAlertsManager
-            currentSpot={marketData.rates.xauUsd}
-            currentThaiGold={marketData.thaiGold.associationSell}
-            speculationPlan={marketData.speculationPlan}
+            currentSpot={effectiveData.rates.xauUsd}
+            currentThaiGold={effectiveData.thaiGold.associationSell}
+            speculationPlan={effectiveData.speculationPlan}
             alerts={alerts}
             autoSettings={autoSettings}
             serverTelegramSecrets={serverTelegramSecrets}

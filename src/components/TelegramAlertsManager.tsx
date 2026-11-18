@@ -120,10 +120,11 @@ export const TelegramAlertsManager: React.FC<Props> = ({
   };
 
   const buildFormattedMessage = (scenario?: 'BUY' | 'TAKE_PROFIT' | 'GOLDEN_HOURS') => {
-    const score = speculationPlan.confidenceScore || 98.6;
+    const score = speculationPlan.confidenceScore || 98.0;
+    const threshold = autoSettings.confluenceThreshold ?? 98;
     const weekly = speculationPlan.weeklyStrategy || {
-      entryDay: 'วันจันทร์ (Monday Open / Dip)',
-      exitDay: 'วันศุกร์ (Friday Close)',
+      entryDay: 'แจ้งเตือนเตรียมซื้อทันทีทุกวัน (ไม่ต้องรอวันจันทร์)',
+      exitDay: 'ตั้งขายล่วงหน้า 7 วันบนเป๋าตัง (+5.00%)',
       targetProfitPercent: 5.0,
       targetSpotPrice: Number((currentSpot * 1.05).toFixed(2)),
       gainUsdPerOz: Number((currentSpot * 0.05).toFixed(2)),
@@ -133,39 +134,38 @@ export const TelegramAlertsManager: React.FC<Props> = ({
 
     if (scenario === 'BUY') {
       return `
-🚨 [ได้เวลาเข้าซื้อเก็งกำไร! - คะแนนปัจจัยมั่นใจ ${score}%]
+🚨 [เตรียมเข้าซื้อทองคำทันที! - คะแนนปัจจัยเกินมาตรฐาน ${score}%]
 ------------------------------------
-🎯 ระบบประเมิน: จังหวะเข้าซื้อความแม่นยำสูง (Confluence ${score}%)
-🗓️ กลยุทธ์สัปดาห์: ${weekly.entryDay} ➔ ${weekly.exitDay}
+🎯 มาตรวัดปัจจัยรอบด้าน: ${score}% (เกินมาตรฐาน ≥ ${threshold}%)
+⚡ แผนเข้าซื้อ: แจ้งเตือนเตรียมซื้อทันที (ไม่ต้องรอถึงวันจันทร์)
 💰 ราคาทองสปอตโลก: $${currentSpot.toFixed(2)} USD/oz
-🪙 ราคาทอง 96.5% (สมาคม): ฿${currentThaiGold.toLocaleString()} บาท
+🪙 ราคาทอง (เป๋าตัง): ฿${currentThaiGold.toLocaleString()} บาท
 
-🎯 จุดยุทธศาสตร์รอบสัปดาห์นี้:
-• ช่วงราคาเข้าซื้อ (Entry): $${speculationPlan.spotLevels.entryRange}
+🎯 จุดยุทธศาสตร์เตรียมเข้าซื้อ & ทำกำไร:
+• ช่วงราคาเตรียมซื้อ (Entry): $${speculationPlan.spotLevels.entryRange}
 • เป้าหมาย TP +5.00%: $${weekly.targetSpotPrice} USD (฿${weekly.targetThaiPrice.toLocaleString()} บาท)
 • กำไรคาดการณ์: +$${weekly.gainUsdPerOz} USD/oz (+฿${weekly.gainThaiPerBaht.toLocaleString()} บาท/บาททอง)
 • จุดตัดขาดทุน (SL): $${speculationPlan.spotLevels.stopLoss}
 
 💡 คำแนะนำแอ็กชันบนแอปเป๋าตัง:
-1. เข้าเมนู "ซื้อทอง" พอร์ต USD (MTS / YLG) สเปรดแคบ 0.40$
-2. เข้าซื้อไม้แรก ณ ราคาตลาดปัจจุบัน
+1. เข้าเมนู "ซื้อทอง" พอร์ต USD (MTS / YLG) สเปรดแคบ 0.40$ หรือพอร์ต 99.99%
+2. เตรียมเข้าซื้อไม้แรกตามโซน Entry ได้ทันทีวันนี้ ไม่ต้องรอวันจันทร์
 3. เมื่อซื้อเสร็จ ให้กด "ขายทอง" > "ตั้งราคา" ล่วงหน้า +5.00% ($${weekly.targetSpotPrice} USD) กำหนดอายุ 7 วัน ระบบจะขายล็อกกำไรอัตโนมัติ
-4. ปิดสถานะขายทำกำไรทั้งหมดภายในวันศุกร์ ไม่ถือข้ามสัปดาห์
       `.trim();
     }
 
     if (scenario === 'TAKE_PROFIT') {
       return `
-🏆 [ได้เวลาขายทำกำไรทองคำ! - แตะเป้าหมายสัปดาห์นี้ TP +5.00%]
+🏆 [ได้เวลาขายทำกำไรทองคำ! - แตะเป้าหมาย TP +5.00%]
 ------------------------------------
-🚀 สัญญาณระบบ: TAKE PROFIT (ขายล็อกกำไรตามแผนสัปดาห์)
+🚀 สัญญาณระบบ: TAKE PROFIT (ขายล็อกกำไรตามแผน)
 💰 ราคาทองสปอตโลก: $${weekly.targetSpotPrice} USD/oz (แตะเป้า TP +5.00%)
-🪙 ราคาทอง 96.5%: ฿${weekly.targetThaiPrice.toLocaleString()} บาท
-💵 ผลตอบแทนรอบสัปดาห์: +5.00% (+฿${weekly.gainThaiPerBaht.toLocaleString()} บาท/บาททอง)
+🪙 ราคาทองอ้างอิง: ฿${weekly.targetThaiPrice.toLocaleString()} บาท
+💵 ผลตอบแทนเป้าหมาย: +5.00% (+฿${weekly.gainThaiPerBaht.toLocaleString()} บาท/บาททอง)
 
 💡 แนะนำการแอ็กชันบนแอปเป๋าตัง:
 • หากตั้งราคาขายล่วงหน้า 7 วันไว้ คำสั่งอาจถูกจับคู่แล้ว
-• หากยังไม่ได้ตั้ง แนะนำเปิดแอปเป๋าตัง กด "ขายทอง" ทันที เพื่อล็อกกำไรเข้ากระเป๋าก่อนปิดตลาดวันศุกร์ ไม่ถือข้ามสุดสัปดาห์!
+• หากยังไม่ได้ตั้ง แนะนำเปิดแอปเป๋าตัง กด "ขายทอง" ทันที เพื่อล็อกกำไรเข้ากระเป๋า!
       `.trim();
     }
 
@@ -176,8 +176,8 @@ export const TelegramAlertsManager: React.FC<Props> = ({
 ⚡ ช่วงเวลาทองคำ: 19:30 - 22:30 น. (US Session Golden Hours)
 🔥 สภาพคล่องทองคำโลกพุ่งสูง ผันผวนแรง เหมาะทำกำไรเร็วสุด
 💰 ราคาทองปัจจุบัน: $${currentSpot.toFixed(2)} USD/oz
-🪙 ราคาทอง 96.5%: ฿${currentThaiGold.toLocaleString()} บาท
-🎯 เป้าหมายสัปดาห์ TP +5%: $${weekly.targetSpotPrice} USD
+🪙 ราคาทองอ้างอิง: ฿${currentThaiGold.toLocaleString()} บาท
+🎯 เป้าหมาย TP +5%: $${weekly.targetSpotPrice} USD
 
 💡 คำแนะนำสำหรับเป๋าตัง:
 • ติดตามราคาอย่างใกล้ชิด ร้านทอง MTS / YLG บนเป๋าตังเปิดให้เทรดได้ถึง 02:00 น.
@@ -187,12 +187,12 @@ export const TelegramAlertsManager: React.FC<Props> = ({
     return `
 🔔 [Paotang Gold Signal - สรุปสถานะปัจจุบัน]
 ------------------------------------
-🎯 คะแนนปัจจัยรอบด้าน: ${score}% (${score >= 98 ? 'พร้อมเข้าซื้อ' : 'รอสัญญาณ'})
+🎯 คะแนนปัจจัยรอบด้าน: ${score}% (${score >= threshold ? `เกินมาตรฐาน ≥ ${threshold}% — เตรียมเข้าซื้อ!` : `รอเกินมาตรฐาน ${threshold}%`})
 📈 สัญญาณ: ${speculationPlan.signal}
 💰 ราคาทองโลก (XAU/USD): $${currentSpot.toFixed(2)}
-🪙 ราคาทองสมาคม: ฿${currentThaiGold.toLocaleString()} บาท
+🪙 ราคาทองเป๋าตัง: ฿${currentThaiGold.toLocaleString()} บาท
 🎯 เข้าซื้อ: $${speculationPlan.spotLevels.entryRange}
-🚀 เป้าสัปดาห์ TP +5%: $${weekly.targetSpotPrice} USD (฿${weekly.targetThaiPrice.toLocaleString()})
+🚀 เป้า TP +5%: $${weekly.targetSpotPrice} USD (฿${weekly.targetThaiPrice.toLocaleString()})
 🛑 จุดคัท SL: $${speculationPlan.spotLevels.stopLoss}
 💡 คำแนะนำ: ${speculationPlan.recommendedShop}
     `.trim();
@@ -402,8 +402,8 @@ export const TelegramAlertsManager: React.FC<Props> = ({
           </span>
         </label>
 
-        {/* Anti-Spam & 98% Confluence Feature Banner */}
-        <div className="bg-amber-500/10 border border-amber-500/30 p-3.5 rounded-xl space-y-2">
+        {/* Anti-Spam & Multi-Factor Confluence Threshold Banner */}
+        <div className="bg-amber-500/10 border border-amber-500/30 p-3.5 rounded-xl space-y-2.5">
           <label className="flex items-start gap-2.5 cursor-pointer">
             <input
               type="checkbox"
@@ -420,55 +420,80 @@ export const TelegramAlertsManager: React.FC<Props> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-extrabold text-amber-300 text-xs flex items-center gap-1.5">
                   <ShieldCheck className="w-4 h-4 text-emerald-400 inline" />
-                  <span>กรองแจ้งเตือนเฉพาะเมื่อคะแนนปัจจัยรอบด้าน ≥ 98% เท่านั้น</span>
+                  <span>
+                    แจ้งเตือนเตรียมซื้อทันที เมื่อคะแนนปัจจัยรอบด้าน ≥ {autoSettings.confluenceThreshold ?? 98}% (ไม่ต้องรอวันจันทร์)
+                  </span>
                 </span>
                 <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
-                  แนะนำ: ลดความถี่ & สัญญาณแม่นยำสูงสุด
+                  Real-Time Instant Alert
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 leading-relaxed mt-1">
-                แก้ปัญหาแจ้งเตือนเข้าถี่เกินไป! ระบบจะตรวจเช็กความสอดคล้อง 5 ปัจจัย (แนวโน้ม 3 เส้น EMA, โมเมนตัม RSI, แนวรับ Pivot S1, ค่าเงินบาท/สเปรด MTS, และรอบเวลาเทรด) หากคะแนนรวมไม่ถึง 98% จะไม่มีการยิงแจ้งเตือนรบกวนเด็ดขาด
+                ระบบจะตรวจเช็กความสอดคล้อง 5 ปัจจัย (แนวโน้ม EMA, โมเมนตัม RSI, แนวรับ Pivot S1, ค่าเงินบาท/สเปรด MTS, และความพร้อมเรียลไทม์ 24/7) ทันทีที่คะแนนรวมเกินมาตรฐานที่ตั้งไว้ จะยิงแจ้งเตือนเตรียมเข้าซื้อเข้า Telegram ทันทีทุกวันโดยไม่ต้องรอถึงวันจันทร์
               </p>
             </div>
           </label>
 
-          {/* Cooldown & Schedule Selector */}
+          {/* Threshold, Cooldown & Anytime Instant Mode */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-amber-500/20 text-xs">
-            <div className="flex items-center gap-2">
-              <Clock className="w-3.5 h-3.5 text-amber-400" />
-              <span className="text-slate-300 font-medium">ระยะห่างการแจ้งเตือน (Cooldown):</span>
-              <select
-                value={autoSettings.cooldownMinutes}
-                onChange={(e) =>
-                  onUpdateAutoSettings({
-                    ...autoSettings,
-                    cooldownMinutes: Number(e.target.value),
-                  })
-                }
-                className="bg-slate-900 border border-slate-700 text-white rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-amber-400"
-              >
-                <option value={60}>60 นาที (1 ชั่วโมง)</option>
-                <option value={240}>240 นาที (4 ชั่วโมง)</option>
-                <option value={360}>360 นาที (6 ชั่วโมง - แนะนำสำหรับรอบเทรด)</option>
-                <option value={720}>720 นาที (12 ชั่วโมง)</option>
-                <option value={1440}>1,440 นาที (24 ชั่วโมง / วันละ 1 ครั้ง)</option>
-              </select>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-slate-300 font-medium">เกณฑ์มาตรฐานแจ้งเตือน:</span>
+                <select
+                  value={autoSettings.confluenceThreshold ?? 98}
+                  onChange={(e) =>
+                    onUpdateAutoSettings({
+                      ...autoSettings,
+                      confluenceThreshold: Number(e.target.value),
+                    })
+                  }
+                  className="bg-slate-900 border border-emerald-500/40 text-emerald-300 font-bold rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-emerald-400"
+                >
+                  <option value={98}>≥ 98% (ความแม่นยำสูงสุด - ค่าเริ่มต้น)</option>
+                  <option value={95}>≥ 95% (ไวขึ้น - จังหวะย่อสวย)</option>
+                  <option value={90}>≥ 90% (เตือนเร็ว - เก็บจังหวะต้นน้ำ)</option>
+                  <option value={85}>≥ 85% (เปิดกว้าง)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-slate-300 font-medium">Cooldown:</span>
+                <select
+                  value={autoSettings.cooldownMinutes}
+                  onChange={(e) =>
+                    onUpdateAutoSettings({
+                      ...autoSettings,
+                      cooldownMinutes: Number(e.target.value),
+                    })
+                  }
+                  className="bg-slate-900 border border-slate-700 text-white rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-amber-400"
+                >
+                  <option value={60}>60 นาที</option>
+                  <option value={240}>240 นาที (4 ชม.)</option>
+                  <option value={360}>360 นาที (6 ชม.)</option>
+                  <option value={720}>720 นาที (12 ชม.)</option>
+                  <option value={1440}>24 ชั่วโมง</option>
+                </select>
+              </div>
             </div>
 
             <label className="flex items-center gap-1.5 cursor-pointer text-slate-300">
               <input
                 type="checkbox"
-                checked={autoSettings.weeklyScheduleOnly}
+                checked={autoSettings.instantAnyDayAlert ?? true}
                 onChange={(e) =>
                   onUpdateAutoSettings({
                     ...autoSettings,
-                    weeklyScheduleOnly: e.target.checked,
+                    instantAnyDayAlert: e.target.checked,
+                    weeklyScheduleOnly: false,
                   })
                 }
                 className="rounded text-emerald-500 focus:ring-0"
               />
-              <span className="text-[11px] font-medium text-emerald-300">
-                เน้นรอบเทรด วันจันทร์ ➔ ปิดขายวันศุกร์ (TP +5.00%)
+              <span className="text-[11px] font-semibold text-emerald-300">
+                แจ้งเตือนเตรียมซื้อทันทีทุกวัน (ไม่ต้องรอวันจันทร์)
               </span>
             </label>
           </div>
@@ -490,11 +515,11 @@ export const TelegramAlertsManager: React.FC<Props> = ({
             />
             <div>
               <span className="font-bold text-slate-200 block">
-                🟢 แจ้งเตือนเมื่อ "ได้เวลาเข้าซื้อ" (Buy Signal {autoSettings.strict98PercentOnly ? '≥ 98%' : ''})
+                🟢 แจ้งเตือน "เตรียมเข้าซื้อทันที" ({autoSettings.strict98PercentOnly ? `Confluence ≥ ${autoSettings.confluenceThreshold ?? 98}%` : 'ทุกสัญญาณซื้อ'})
               </span>
               <span className="text-[11px] text-slate-400 leading-tight block mt-0.5">
                 {autoSettings.strict98PercentOnly
-                  ? 'จะแจ้งเตือนเมื่อคะแนนปัจจัย 5 ด้านผ่านเกณฑ์ ≥ 98% เท่านั้น เพื่อความชัวร์ในการทำกำไร'
+                  ? `แจ้งเตือนเตรียมซื้อทันทีทุกวันเมื่อมาตรวัดคะแนนปัจจัยรอบด้าน ≥ ${autoSettings.confluenceThreshold ?? 98}% โดยไม่ต้องรอวันจันทร์`
                   : `เตือนเมื่อแตะช่วง Entry (${speculationPlan.spotLevels.entryRange}) หรือเกิดสัญญาณซื้อ`}
               </span>
             </div>
@@ -517,7 +542,7 @@ export const TelegramAlertsManager: React.FC<Props> = ({
                 🏆 แจ้งเตือนเมื่อ "ได้เวลาขายทำกำไร" (Take Profit TP +5.00%)
               </span>
               <span className="text-[11px] text-slate-400 leading-tight block mt-0.5">
-                เตือนเมื่อราคาขึ้นแตะเป้า TP +5.00% (${speculationPlan.weeklyStrategy?.targetSpotPrice || speculationPlan.spotLevels.tp5PercentWeekly}) เพื่อขายล็อกกำไรก่อนวันศุกร์
+                เตือนเมื่อราคาขึ้นแตะเป้า TP +5.00% (${speculationPlan.weeklyStrategy?.targetSpotPrice || speculationPlan.spotLevels.tp5PercentWeekly}) เพื่อขายล็อกกำไร
               </span>
             </div>
           </label>
@@ -580,7 +605,7 @@ export const TelegramAlertsManager: React.FC<Props> = ({
               className="py-2.5 px-3 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 shadow-sm"
             >
               <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
-              <span>🎯 ทดสอบเตือน: สัญญาณซื้อ 98%+ (TP +5%)</span>
+              <span>🎯 ทดสอบเตือน: เตรียมซื้อทันที (≥ {autoSettings.confluenceThreshold ?? 98}%)</span>
             </button>
 
             <button
@@ -1113,11 +1138,11 @@ export const TelegramAlertsManager: React.FC<Props> = ({
                 </div>
 
                 <div className="font-bold text-amber-300 text-[12px]">
-                  🚨 [ได้เวลาเข้าซื้อเก็งกำไร!]
+                  🚨 [เตรียมเข้าซื้อทองคำทันที! - เกินมาตรฐาน]
                 </div>
 
-                <div className="text-[11px] text-slate-300">
-                  🗓️ กลยุทธ์สัปดาห์: <strong className="text-white">วันจันทร์ ➔ วันศุกร์</strong>
+                <div className="text-[11px] text-emerald-300 font-medium">
+                  ⚡ แจ้งเตือนเตรียมซื้อทันทีทุกวัน (ไม่ต้องรอถึงวันจันทร์)
                 </div>
 
                 <div className="bg-[#0E1621]/90 p-2.5 rounded-lg border border-slate-700/60 space-y-1 text-[11px] font-mono">
@@ -1125,11 +1150,11 @@ export const TelegramAlertsManager: React.FC<Props> = ({
                     💰 Spot XAU: <strong className="text-white">${currentSpot.toFixed(2)}</strong>
                   </div>
                   <div>
-                    🪙 ทอง 96.5%:{' '}
+                    🪙 ราคาทองเป๋าตัง:{' '}
                     <strong className="text-white">฿{currentThaiGold.toLocaleString()}</strong>
                   </div>
                   <div>
-                    🎯 จุดเข้าซื้อ:{' '}
+                    🎯 จุดเตรียมเข้าซื้อ:{' '}
                     <strong className="text-sky-300">${speculationPlan.spotLevels.entryRange}</strong>
                   </div>
                   <div className="text-emerald-400 font-bold">
@@ -1153,7 +1178,7 @@ export const TelegramAlertsManager: React.FC<Props> = ({
 
                 <div className="text-[10px] text-slate-300 pt-1 leading-snug border-t border-slate-700/60 space-y-1">
                   <div>
-                    💡 ซื้อไม้แรกบนเป๋าตัง แล้วตั้งราคาขายล่วงหน้า 7 วัน +5.00% เพื่อปิดทำกำไรภายในวันศุกร์
+                    💡 เตรียมเข้าซื้อไม้แรกบนเป๋าตังทันที แล้วตั้งราคาขายล่วงหน้า 7 วัน +5.00% เพื่อล็อกกำไรอัตโนมัติ
                   </div>
                 </div>
               </div>
